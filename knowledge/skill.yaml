@@ -1,0 +1,99 @@
+skills:
+  - topic: "Java Concurrency & Multithreading"
+    keywords:
+      - "concurrency"
+      - "multithreading"
+      - "synchronization"
+      - "executorservice"
+      - "thread pool"
+      - "concurrent collections"
+      - "concurrencia"
+      - "hilos"
+      - "sincronizacion"
+    experience_years: "5+ años"
+    is_strong_area: true
+    summary_es: >
+      He trabajado con concurrencia en Java durante más de 5 años, usando ExecutorService,
+      thread pools personalizados y colecciones concurrentes como ConcurrentHashMap y
+      CopyOnWriteArrayList. Es una de mis áreas más fuertes.
+    summary_en: >
+      I've worked with Java concurrency for over 5 years, using ExecutorService, custom
+      thread pools, and concurrent collections like ConcurrentHashMap and
+      CopyOnWriteArrayList. It's one of my strongest technical areas.
+    recent_production_example_es: >
+      Recientemente optimicé un servicio que procesaba pagos en paralelo, reduciendo
+      contención de locks migrando de synchronized a ReentrantLock con timeout,
+      hace aproximadamente 3 meses.
+    recent_production_example_en: >
+      Recently I optimized a payment processing service running in parallel, reducing
+      lock contention by migrating from synchronized blocks to ReentrantLock with
+      timeout, about 3 months ago.
+
+  - topic: "JVM Performance & Troubleshooting"
+    keywords:
+      - "jvm performance"
+      - "garbage collection"
+      - "memory management"
+      - "performance tuning"
+      - "gc"
+      - "rendimiento jvm"
+      - "gestion de memoria"
+    experience_years: "4+ años"
+    is_strong_area: true
+    summary_es: >
+      He sido responsable de análisis y optimización de rendimiento de JVM en producción,
+      ajustando parámetros de garbage collection (G1GC, tamaños de heap) y analizando
+      comportamiento de hilos bajo carga. Es una de mis áreas fuertes.
+    summary_en: >
+      I've been responsible for JVM performance analysis and optimization in production,
+      tuning garbage collection parameters (G1GC, heap sizing) and analyzing thread
+      behavior under load. It's one of my strong areas.
+
+  - topic: "Thread Dumps / Heap Dumps"
+    keywords:
+      - "thread dump"
+      - "heap dump"
+      - "jstack"
+      - "jcmd"
+      - "jfr"
+      - "visualvm"
+      - "jconsole"
+      - "mat"
+      - "volcado de hilos"
+      - "volcado de memoria"
+    experience_years: "3+ años"
+    is_strong_area: true
+    tools_used:
+      - "jstack"
+      - "jcmd"
+      - "VisualVM"
+      - "Eclipse MAT"
+      - "Java Flight Recorder (JFR)"
+    summary_es: >
+      Sí, he capturado y analizado thread dumps y heap dumps personalmente, usando
+      principalmente jstack y jcmd para capturas rápidas en producción, y Eclipse MAT
+      para análisis profundo de memory leaks.
+    summary_en: >
+      Yes, I've personally captured and analyzed thread dumps and heap dumps, mainly
+      using jstack and jcmd for quick production captures, and Eclipse MAT for deep
+      memory leak analysis.
+
+  - topic: "Production Incident Example"
+    keywords:
+      - "production issue"
+      - "incident"
+      - "root cause"
+      - "latency"
+      - "performance degradation"
+      - "incidente en produccion"
+      - "causa raiz"
+    recent_incident_es: >
+      El incidente más reciente fue un memory leak causado por un ExecutorService que
+      nunca se cerraba correctamente, acumulando hilos huérfanos. La causa raíz fue
+      falta de shutdown() en el ciclo de vida del servicio, y la solución fue implementar
+      un try-with-resources y monitoreo de thread count.
+    recent_incident_en: >
+      The most recent incident was a memory leak caused by an ExecutorService that was
+      never properly shut down, accumulating orphaned threads. The root cause was a
+      missing shutdown() call in the service lifecycle, and the fix was implementing
+      try-with-resources along with thread count monitoring.
