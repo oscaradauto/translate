@@ -23,7 +23,7 @@ MEETING_LANGUAGE = "en"
 MIC_DEVICE_INDEX = int(os.getenv("MIC_DEVICE_INDEX", "-1"))
 
 # Faster-Whisper model configuration.
-# small.en is a good CPU-friendly starting point for English-only meetings.
+# base.en is the default because Stage 1 prioritizes low-latency English captions.
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base.en")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
