@@ -61,6 +61,8 @@ class RealtimeTranscriptionSession:
         self._partial_buffers: dict[str, str] = {}
         self._startup_error: Exception | None = None
         self._draining = False
+        self._error_reported = False
+        self._error_reported = False
 
     @property
     def is_running(self) -> bool:
@@ -125,6 +127,7 @@ class RealtimeTranscriptionSession:
             self._audio_buffered = True
             return True
         except Exception as exc:
+            self._running = False
             self._report_error(exc)
             return False
 
@@ -137,6 +140,7 @@ class RealtimeTranscriptionSession:
             self._audio_buffered = False
             return True
         except Exception as exc:
+            self._running = False
             self._report_error(exc)
             return False
 
@@ -231,9 +235,11 @@ class RealtimeTranscriptionSession:
                 }
             )
 
-            while self._running and not self._closing:
+            while (self._running or self._draining) and not self._closing:
                 event = self._recv_event()
                 if event is None:
+                    if self._draining and self._closed_event.is_set():
+                        break
                     continue
 
                 event_type = event.get("type")
@@ -262,6 +268,8 @@ class RealtimeTranscriptionSession:
                     self._partial_buffers.pop(item_id, None)
                     if transcript:
                         self.on_final(self.source, transcript, item_id)
+                    if self._draining:
+                        self._closed_event.set()
                     continue
 
                 if event_type == "session.closed":
@@ -336,5 +344,8 @@ class RealtimeTranscriptionSession:
             self.on_status(self.source, status)
 
     def _report_error(self, exc: Exception) -> None:
+        if self._error_reported:
+            return
+        self._error_reported = True
         if self.on_error:
             self.on_error(self.source, exc)
