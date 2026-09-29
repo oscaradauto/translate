@@ -95,6 +95,7 @@ class OverlayWindow(QWidget):
         self._max_entries = 60
         self._starting = False
         self._closing = False
+        self._shutdown_watchdog_armed = False
 
         self._history = []
         self._history_index = {}
@@ -402,7 +403,7 @@ class OverlayWindow(QWidget):
     def _on_status_changed(self, text):
         listening = text.startswith("Escuchando")
         loading = text in ("Cargando...", "Preparando audio...")
-        error = text.startswith("Error")
+        error = text.startswith("Error") or text == "API sin créditos"
         active = text not in ("Inactivo", "Detenido", "") and not error
 
         if listening:
@@ -508,7 +509,14 @@ class OverlayWindow(QWidget):
         self.controller = None
         self._starting = False
         self._closing = False
+        self._shutdown_watchdog_armed = False
         QApplication.quit()
+
+    def _shutdown_watchdog_timeout(self):
+        """Prevent a third-party cleanup stall from keeping the process alive."""
+        if self._closing:
+            self._closing = False
+            QApplication.quit()
 
     def _show_history(self):
         dialog = QDialog(self)
@@ -659,6 +667,11 @@ class OverlayWindow(QWidget):
             # La ventana desaparece inmediatamente. El audio y los recursos del
             # motor de transcripción se liberan en segundo plano.
             self.hide()
+
+            if not self._shutdown_watchdog_armed:
+                self._shutdown_watchdog_armed = True
+                QTimer.singleShot(8000, self._shutdown_watchdog_timeout)
+
             self._stop_controller_async(controller)
             event.ignore()
             return
