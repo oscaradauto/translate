@@ -20,7 +20,7 @@ load_dotenv()
 MEETING_LANGUAGE = "en"
 
 # PyAudio input device index for the physical microphone.
-MIC_DEVICE_INDEX = int(os.getenv("MIC_DEVICE_INDEX", "1"))
+MIC_DEVICE_INDEX = int(os.getenv("MIC_DEVICE_INDEX", "-1"))
 
 # Faster-Whisper model configuration.
 # small.en is a good CPU-friendly starting point for English-only meetings.
@@ -53,6 +53,14 @@ MEETING_SPEECH_START_MS = int(
 )
 MEETING_MIN_VOICED_MS = int(
     os.getenv("MEETING_MIN_VOICED_MS", "240")
+)
+
+# When local microphone speech is detected, prefer YOU over the system
+# loopback for a short hold window. This prevents the user's own voice from
+# being emitted as MEETING when Teams/Windows routes a local sidetone or mix
+# into the playback capture.
+LOCAL_SPEECH_GATE_HOLD_MS = int(
+    os.getenv("LOCAL_SPEECH_GATE_HOLD_MS", "800")
 )
 
 # Bias the local model toward the vocabulary used in engineering meetings.
