@@ -101,6 +101,7 @@ class Bridge(QObject):
     subtitle_partial = pyqtSignal(str, str)
     subtitle_ready = pyqtSignal(str, str, int)
     subtitle_translated = pyqtSignal(str, str, int, bool)
+    shutdown_finished = pyqtSignal()
 
 
 class OverlayWindow(QWidget):
@@ -115,9 +116,8 @@ class OverlayWindow(QWidget):
         self._partial_entries = {}
         self._max_entries = 60
         self._starting = False
+        self._closing = False
 
-        # Historial completo en memoria durante la vida de la aplicación.
-        # No se escribe a disco y se elimina automáticamente al cerrar la app.
         self._history = []
         self._history_index = {}
 
@@ -163,9 +163,7 @@ class OverlayWindow(QWidget):
         title_bar.setSpacing(7)
 
         title_icon = QLabel("🎙")
-        title_icon.setStyleSheet(
-            "font-size: 14px; background: transparent;"
-        )
+        title_icon.setStyleSheet("font-size: 14px; background: transparent;")
 
         title = QLabel("Meeting Subtitles")
         title.setStyleSheet(
@@ -292,6 +290,7 @@ class OverlayWindow(QWidget):
         self.bridge.subtitle_partial.connect(self._on_subtitle_partial)
         self.bridge.subtitle_ready.connect(self._on_subtitle_ready)
         self.bridge.subtitle_translated.connect(self._on_subtitle_translated)
+        self.bridge.shutdown_finished.connect(self._on_shutdown_finished)
 
     def _on_language_changed(self, index):
         set_meeting_language("en")
@@ -308,7 +307,7 @@ class OverlayWindow(QWidget):
         QTimer.singleShot(100, self._on_start_clicked)
 
     def _on_start_clicked(self):
-        if self._starting:
+        if self._starting or self._closing:
             return
 
         if self.controller:
@@ -333,10 +332,7 @@ class OverlayWindow(QWidget):
             "on_subtitle_translated": (
                 lambda source, text, segment_id, incremental: (
                     self.bridge.subtitle_translated.emit(
-                        source,
-                        text,
-                        segment_id,
-                        incremental,
+                        source, text, segment_id, incremental
                     )
                 )
             ),
@@ -352,27 +348,17 @@ class OverlayWindow(QWidget):
             daemon=True,
         ).start()
 
-    def _on_stop_clicked(self):
-        if not self.controller:
-            self._starting = False
-            self.start_btn.setText("▶ Iniciar")
-            self.start_btn.setEnabled(True)
-            return
-
-        self._starting = False
-        self.start_btn.setEnabled(False)
-        self.start_btn.setText("⏳ Deteniendo...")
-
-        controller = self.controller
-        self.controller = None
-
+    def _stop_controller_async(self, controller, close_after=False):
         def _stop_controller():
             try:
                 controller.stop()
             except Exception as exc:
                 print(f"[UI] Error deteniendo audio: {exc}")
             finally:
-                self.bridge.status_changed.emit("Detenido")
+                if close_after:
+                    self.bridge.shutdown_finished.emit()
+                else:
+                    self.bridge.status_changed.emit("Detenido")
 
         threading.Thread(
             target=_stop_controller,
@@ -380,6 +366,23 @@ class OverlayWindow(QWidget):
             daemon=True,
         ).start()
 
+    def _on_stop_clicked(self):
+        if not self.controller:
+            self._starting = False
+            self.start_btn.setText("▶ Iniciar")
+            self.start_btn.setEnabled(True)
+            self._on_status_changed("Detenido")
+            return
+
+        self._starting = False
+        self.start_btn.setEnabled(False)
+        self.start_btn.setText("⏳ Deteniendo...")
+        self._on_status_changed("Deteniendo...")
+
+        controller = self.controller
+        self.controller = None
+
+        self._stop_controller_async(controller)
         self._clear_transcript()
 
     def _clear_transcript(self):
@@ -429,9 +432,7 @@ class OverlayWindow(QWidget):
         header = QHBoxLayout()
         header.setSpacing(7)
 
-        badge = QLabel(
-            f"{SOURCE_LABELS.get(source, source)}-ENG"
-        )
+        badge = QLabel(f"{SOURCE_LABELS.get(source, source)}-ENG")
         badge.setStyleSheet(
             f"background-color: {SOURCE_COLORS.get(source, '#888888')}; "
             "color: white; font-size: 10px; font-weight: bold; "
@@ -501,6 +502,7 @@ class OverlayWindow(QWidget):
     def _on_status_changed(self, text):
         listening = text.startswith("Escuchando")
         loading = text in ("Cargando...", "Preparando audio...")
+        stopping = text == "Deteniendo..."
         error = text == "Error de audio"
         active = text not in ("Inactivo", "Detenido", "")
 
@@ -510,6 +512,9 @@ class OverlayWindow(QWidget):
             self.start_btn.setEnabled(True)
         elif loading:
             self.start_btn.setText("⏳ Cargando...")
+            self.start_btn.setEnabled(False)
+        elif stopping:
+            self.start_btn.setText("⏳ Deteniendo...")
             self.start_btn.setEnabled(False)
         elif error:
             self._starting = False
@@ -552,7 +557,6 @@ class OverlayWindow(QWidget):
 
         entry["english"].setText(text)
 
-        # No borramos la última traducción incremental mientras el inglés crece.
         if not entry["spanish"].text():
             entry["spanish"].setText("Traduciendo...")
 
@@ -599,10 +603,6 @@ class OverlayWindow(QWidget):
         self._scroll_to_bottom()
 
     def _on_subtitle_translated(self, source, text, segment_id, incremental):
-        key = self._entry_key(source, segment_id)
-
-        # segment_id=0 representa una traducción parcial. La tarjeta puede haber
-        # pasado a su ID definitivo si el inglés terminó mientras Gemma respondía.
         if incremental and segment_id == 0:
             entry = self._partial_entries.get(source)
             if entry is None:
@@ -622,6 +622,15 @@ class OverlayWindow(QWidget):
                 self._history[history_position]["spanish"] = text
 
         self._scroll_to_bottom()
+
+    def _on_shutdown_finished(self):
+        self._on_status_changed("Detenido")
+        self.controller = None
+        self._starting = False
+        self._closing = False
+        self.close_btn.setEnabled(True)
+        self.start_btn.setEnabled(True)
+        QTimer.singleShot(0, self.close)
 
     def _show_history(self):
         dialog = QDialog(self)
@@ -702,12 +711,24 @@ class OverlayWindow(QWidget):
         super().mouseReleaseEvent(event)
 
     def closeEvent(self, event):
+        if self._closing:
+            event.accept()
+            return
+
         if self.controller:
-            try:
-                self.controller.stop()
-            except Exception as exc:
-                print(f"[UI] Error cerrando audio: {exc}")
+            self._closing = True
+            self._starting = False
+            self.start_btn.setEnabled(False)
+            self.close_btn.setEnabled(False)
+            self.history_btn.setEnabled(False)
+            self.lang_combo.setEnabled(False)
+            self._on_status_changed("Deteniendo...")
+
+            controller = self.controller
             self.controller = None
+            self._stop_controller_async(controller, close_after=True)
+            event.ignore()
+            return
 
         self._starting = False
         event.accept()
