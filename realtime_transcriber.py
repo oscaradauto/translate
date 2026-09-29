@@ -15,7 +15,7 @@ from typing import Callable
 import websocket
 
 OPENAI_REALTIME_URL = (
-    "wss://api.openai.com/v1/realtime?model=gpt-live-transcribe"
+    "wss://api.openai.com/v1/realtime?intent=transcription"
 )
 
 PartialCallback = Callable[[str, str, str], None]
