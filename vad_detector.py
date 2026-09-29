@@ -30,8 +30,6 @@ REALTIME_MODEL = "small"
 REALTIME_POST_SPEECH_SILENCE = 0.4
 REALTIME_PROCESSING_PAUSE = 0.2
 
-# Traducción incremental: actualizamos el español aproximadamente cada segundo
-# mientras el inglés continúa creciendo, sin enviar una petición por cada token.
 INCREMENTAL_TRANSLATION_INTERVAL = 0.9
 MIN_TRANSLATION_CHANGE_CHARS = 4
 
@@ -279,8 +277,6 @@ class ListenerController:
             thread_name_prefix="subtitle-translation",
         )
 
-        # Estado independiente por fuente. La generación evita que una
-        # traducción antigua pueda sobrescribir una más reciente.
         self._translation_lock = threading.Lock()
         self._translation_state = {
             "YOU": {
@@ -302,7 +298,9 @@ class ListenerController:
     def _next_segment_id(self):
         with self._counter_lock:
             self._segment_counter += 1
-            return self._segment    def _submit_translation(self, source, text, segment_id, is_final=False):
+            return self._segment_counter
+
+    def _submit_translation(self, source, text, segment_id, is_final=False):
         text = text.strip()
         if not text:
             return
@@ -310,9 +308,6 @@ class ListenerController:
         with self._translation_lock:
             state = self._translation_state[source]
 
-            # Solo mantenemos una traducción en ejecución por fuente.
-            # Si Gemma todavía está procesando, guardamos únicamente el texto
-            # más reciente para evitar una cola de traducciones obsoletas.
             if state["in_flight"]:
                 state["pending"] = (text, segment_id, is_final)
                 state["generation"] += 1
@@ -346,8 +341,6 @@ class ListenerController:
                 state["in_flight"] = False
                 current_generation = state["generation"]
 
-                # Si durante esta petición llegó texto más nuevo, lo enviamos
-                # inmediatamente después, sin acumular una cola.
                 if self.running and state["pending"] is not None:
                     next_request = state["pending"]
                     state["pending"] = None
@@ -377,8 +370,6 @@ class ListenerController:
 
         self._emit("on_subtitle_partial", source_label, text)
 
-        # No traducimos cada actualización de RealtimeSTT. Esperamos ~0.9 s
-        # o un cambio suficientemente grande para mantener baja la latencia.
         now = time.monotonic()
         text = text.strip()
 
@@ -408,8 +399,6 @@ class ListenerController:
         segment_id = self._next_segment_id()
         self._emit("on_subtitle", source_label, text.strip(), segment_id)
 
-        # La traducción final siempre se envía, aunque haya habido traducciones
-        # incrementales anteriores.
         self._submit_translation(
             source_label,
             text,
@@ -428,6 +417,8 @@ class ListenerController:
                 state["last_submitted_text"] = ""
                 state["last_submit_time"] = 0.0
                 state["generation"] = 0
+                state["in_flight"] = False
+                state["pending"] = None
 
         self._emit("on_status", "Preparando audio...")
 
@@ -471,6 +462,11 @@ class ListenerController:
         self.mic_streamer = None
         self.loopback_streamer = None
 
+        with self._translation_lock:
+            for state in self._translation_state.values():
+                state["pending"] = None
+                state["in_flight"] = False
+
         self._translation_pool.shutdown(wait=False, cancel_futures=True)
         self._translation_pool = ThreadPoolExecutor(
             max_workers=2,
@@ -478,3 +474,8 @@ class ListenerController:
         )
 
         self._emit("on_status", "Detenido")
+
+    def _emit(self, callback_name, *args):
+        callback = self.callbacks.get(callback_name)
+        if callback:
+            callback(*args)
