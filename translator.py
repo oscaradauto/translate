@@ -12,7 +12,7 @@ load_dotenv()
 
 OLLAMA_ENDPOINT = os.environ.get("OLLAMA_ENDPOINT", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:1.5b")
-REQUEST_TIMEOUT = 4.0
+REQUEST_TIMEOUT = 10.0
 
 _client_lock = threading.Lock()
 
@@ -35,6 +35,7 @@ def translate_text(text, source="EN", target="ES"):
         "model": OLLAMA_MODEL,
         "prompt": f"{TRANSLATE_SYSTEM_PROMPT}\n\n{text.strip()}",
         "stream": False,
+        "keep_alive": "10m",
         "options": {
             "temperature": 0.0,
         },
