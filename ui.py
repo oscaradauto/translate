@@ -22,7 +22,6 @@ from PyQt6.QtWidgets import (
 )
 
 from config import set_meeting_language
-from vad_detector import ListenerController
 
 
 PILL_STYLE = """
@@ -315,6 +314,11 @@ class OverlayWindow(QWidget):
                 self.bridge.subtitle_translated.emit(source, text, segment_id)
             ),
         }
+
+        # Importamos RealtimeSTT/soundcard después de crear QApplication.
+        # Algunos módulos de audio inicializan COM en Windows; hacerlo antes
+        # de Qt puede provocar el error OleInitialize()/0x80010106.
+        from vad_detector import ListenerController
 
         self.controller = ListenerController(callbacks)
 
