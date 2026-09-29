@@ -1,17 +1,20 @@
-"""Traducción asíncrona de subtítulos EN -> ES usando DeepSeek."""
+"""Traducción asíncrona de subtítulos EN -> ES usando Ollama local."""
 
+import json
 import os
+import threading
+import urllib.error
+import urllib.request
 
 from dotenv import load_dotenv
-from openai import OpenAI
 
 load_dotenv()
 
-DEEPSEEK_ENDPOINT = "https://api.deepseek.com"
+OLLAMA_ENDPOINT = os.environ.get("OLLAMA_ENDPOINT", "http://localhost:11434/api/generate")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:1.5b")
 REQUEST_TIMEOUT = 4.0
 
-_client = None
-_client_lock = __import__("threading").Lock()
+_client_lock = threading.Lock()
 
 TRANSLATE_SYSTEM_PROMPT = (
     "Translate the following English meeting subtitle into natural Spanish. "
@@ -20,51 +23,40 @@ TRANSLATE_SYSTEM_PROMPT = (
 )
 
 
-def _get_client():
-    global _client
-
-    if _client is None:
-        with _client_lock:
-            if _client is None:
-                api_key = os.environ.get("DEEPSEEK_API_KEY")
-                if not api_key:
-                    return None
-
-                _client = OpenAI(
-                    base_url=DEEPSEEK_ENDPOINT,
-                    api_key=api_key,
-                    timeout=REQUEST_TIMEOUT,
-                    max_retries=0,
-                )
-
-    return _client
-
-
 def translate_text(text, source="EN", target="ES"):
+    """Translate an English subtitle to Spanish using the local Ollama model."""
     if not text or not text.strip():
         return ""
 
     if source.upper() != "EN" or target.upper() != "ES":
         return ""
 
-    client = _get_client()
-    if client is None:
-        print("[Translator] DEEPSEEK_API_KEY no configurada.")
-        return ""
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": f"{TRANSLATE_SYSTEM_PROMPT}\n\n{text.strip()}",
+        "stream": False,
+        "options": {
+            "temperature": 0.0,
+        },
+    }
+
+    request = urllib.request.Request(
+        OLLAMA_ENDPOINT,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
 
     try:
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": TRANSLATE_SYSTEM_PROMPT},
-                {"role": "user", "content": text},
-            ],
-            temperature=0.0,
-            max_tokens=180,
-        )
+        with _client_lock:
+            with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+                body = json.loads(response.read().decode("utf-8"))
 
-        content = response.choices[0].message.content
+        content = body.get("response", "")
         return content.strip() if content else ""
+    except urllib.error.URLError as exc:
+        print(f"[Translator] Ollama no disponible: {exc}")
+        return ""
     except Exception as exc:
         print(f"[Translator] Error: {exc}")
         return ""
