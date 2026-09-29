@@ -24,7 +24,7 @@ MIC_DEVICE_INDEX = int(os.getenv("MIC_DEVICE_INDEX", "-1"))
 
 # Faster-Whisper model configuration.
 # small.en is a good CPU-friendly starting point for English-only meetings.
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small.en")
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base.en")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
 WHISPER_CPU_THREADS = int(os.getenv("WHISPER_CPU_THREADS", "4"))
@@ -32,11 +32,17 @@ WHISPER_NUM_WORKERS = int(os.getenv("WHISPER_NUM_WORKERS", "1"))
 
 # Caption/VAD tuning.
 SUBTITLE_PARTIAL_INTERVAL_SECONDS = float(
-    os.getenv("SUBTITLE_PARTIAL_INTERVAL_SECONDS", "1.0")
+    os.getenv("SUBTITLE_PARTIAL_INTERVAL_SECONDS", "0.45")
 )
-SUBTITLE_SPEECH_END_MS = int(os.getenv("SUBTITLE_SPEECH_END_MS", "550"))
+SUBTITLE_PARTIAL_MIN_SECONDS = float(
+    os.getenv("SUBTITLE_PARTIAL_MIN_SECONDS", "0.9")
+)
+WHISPER_PARTIAL_WINDOW_SECONDS = float(
+    os.getenv("WHISPER_PARTIAL_WINDOW_SECONDS", "4.0")
+)
+SUBTITLE_SPEECH_END_MS = int(os.getenv("SUBTITLE_SPEECH_END_MS", "700"))
 SUBTITLE_MAX_UTTERANCE_SECONDS = float(
-    os.getenv("SUBTITLE_MAX_UTTERANCE_SECONDS", "15")
+    os.getenv("SUBTITLE_MAX_UTTERANCE_SECONDS", "8")
 )
 
 # False-positive protection. The physical microphone is intentionally more
