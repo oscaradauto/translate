@@ -116,11 +116,6 @@ class RealtimeMicStreamer:
             except Exception:
                 pass
 
-            try:
-                self.recorder.shutdown()
-            except Exception:
-                pass
-
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=2.0)
 
