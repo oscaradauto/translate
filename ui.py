@@ -1,9 +1,3 @@
-import os
-
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-
 import sys
 import threading
 import time
@@ -408,8 +402,8 @@ class OverlayWindow(QWidget):
     def _on_status_changed(self, text):
         listening = text.startswith("Escuchando")
         loading = text in ("Cargando...", "Preparando audio...")
-        error = text == "Error de audio"
-        active = text not in ("Inactivo", "Detenido", "")
+        error = text.startswith("Error")
+        active = text not in ("Inactivo", "Detenido", "") and not error
 
         if listening:
             self._starting = False
@@ -444,6 +438,9 @@ class OverlayWindow(QWidget):
         if text.startswith("Escuchando (solo YOU)"):
             self.mic_status.setText("🎤 Microphone: Connected")
             self.system_status.setText("🔊 System audio: Unavailable")
+        elif text.startswith("Escuchando (solo COMPANION)"):
+            self.mic_status.setText("🎤 Microphone: Unavailable")
+            self.system_status.setText("🔊 System audio: Connected")
         elif listening:
             self.mic_status.setText("🎤 Microphone: Connected")
             self.system_status.setText("🔊 System audio: Connected")
@@ -620,8 +617,8 @@ class OverlayWindow(QWidget):
             controller = self.controller
             self.controller = None
 
-            # La ventana desaparece inmediatamente. El audio, RealtimeSTT,
-            # captura loopback y recursos de audio terminan de liberar recursos en
+            # La ventana desaparece inmediatamente. El audio y los recursos del
+            # motor de transcripción terminan de liberarse en segundo plano;
             # segundo plano; QApplication termina cuando el cleanup finaliza.
             self.hide()
             self._stop_controller_async(controller)
