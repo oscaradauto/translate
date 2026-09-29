@@ -12,11 +12,13 @@ from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -114,6 +116,11 @@ class OverlayWindow(QWidget):
         self._max_entries = 60
         self._starting = False
 
+        # Historial completo en memoria durante la vida de la aplicación.
+        # No se escribe a disco y se elimina automáticamente al cerrar la app.
+        self._history = []
+        self._history_index = {}
+
         self._setup_window()
         self._setup_ui()
         self._connect_signals()
@@ -198,6 +205,10 @@ class OverlayWindow(QWidget):
         self.lang_combo.setStyleSheet(PILL_STYLE)
         self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
 
+        self.history_btn = QPushButton("🕘 Historial")
+        self.history_btn.setStyleSheet(PILL_STYLE)
+        self.history_btn.clicked.connect(self._show_history)
+
         self.start_btn = QPushButton("▶ Iniciar")
         self.start_btn.setStyleSheet(START_BTN_STYLE)
         self.start_btn.clicked.connect(self._on_start_clicked)
@@ -208,6 +219,7 @@ class OverlayWindow(QWidget):
         self.close_btn.clicked.connect(self.close)
 
         controls.addWidget(self.lang_combo)
+        controls.addWidget(self.history_btn)
         controls.addStretch()
         controls.addWidget(self.start_btn)
         controls.addWidget(self.close_btn)
@@ -306,9 +318,6 @@ class OverlayWindow(QWidget):
         self._starting = True
         self._clear_transcript()
 
-        # El arranque de audio puede tardar mientras se cargan RealtimeSTT,
-        # Whisper/VAD y los dispositivos. Bloqueamos el botón para evitar
-        # dobles clics y damos feedback inmediato al usuario.
         self.start_btn.setEnabled(False)
         self.start_btn.setText("⏳ Cargando...")
         self._on_status_changed("Cargando...")
@@ -326,9 +335,6 @@ class OverlayWindow(QWidget):
             ),
         }
 
-        # Importamos RealtimeSTT/soundcard después de crear QApplication.
-        # Algunos módulos de audio inicializan COM en Windows; hacerlo antes
-        # de Qt puede provocar el error OleInitialize()/0x80010106.
         from vad_detector import ListenerController
 
         self.controller = ListenerController(callbacks)
@@ -532,7 +538,6 @@ class OverlayWindow(QWidget):
             self.system_status.setText("🔊 System audio: Ready")
 
     def _on_subtitle_partial(self, source, text):
-        # El parcial se muestra inmediatamente en el mismo bloque de esa voz.
         entry = self._partial_entries.get(source)
         if entry is None:
             entry = self._ensure_entry(source, 0)
@@ -563,6 +568,18 @@ class OverlayWindow(QWidget):
             "color: #718092; font-size: 13px; font-style: italic; "
             "background: transparent;"
         )
+
+        history_key = self._entry_key(source, segment_id)
+        history_item = {
+            "key": history_key,
+            "source": source,
+            "time": _now(),
+            "english": text,
+            "spanish": "",
+        }
+        self._history_index[history_key] = len(self._history)
+        self._history.append(history_item)
+
         self._scroll_to_bottom()
 
     def _on_subtitle_translated(self, source, text, segment_id):
@@ -571,7 +588,69 @@ class OverlayWindow(QWidget):
             "color: #d3dbe4; font-size: 13px; background: transparent;"
         )
         entry["spanish"].setText(text)
+
+        history_key = self._entry_key(source, segment_id)
+        history_position = self._history_index.get(history_key)
+        if history_position is not None:
+            self._history[history_position]["spanish"] = text
+
         self._scroll_to_bottom()
+
+    def _show_history(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Historial de la conversación")
+        dialog.setMinimumSize(720, 520)
+        dialog.setModal(True)
+
+        layout = QVBoxLayout(dialog)
+
+        title = QLabel(
+            f"Historial de la conversación · {len(self._history)} intervenciones"
+        )
+        title.setStyleSheet(
+            "color: white; font-size: 15px; font-weight: bold;"
+        )
+        layout.addWidget(title)
+
+        history_view = QTextBrowser()
+        history_view.setOpenExternalLinks(False)
+        history_view.setStyleSheet("""
+            QTextBrowser {
+                background-color: #0f1216;
+                color: #e7ebef;
+                border: 1px solid rgba(255,255,255,20);
+                border-radius: 10px;
+                padding: 10px;
+                font-size: 13px;
+            }
+        """)
+
+        if not self._history:
+            history_view.setPlainText(
+                "Todavía no hay intervenciones en el historial."
+            )
+        else:
+            blocks = []
+            for item in self._history:
+                source = SOURCE_LABELS.get(item["source"], item["source"])
+                english = item["english"]
+                spanish = item["spanish"] or "Traduciendo..."
+                blocks.append(
+                    f"[{item['time']}] {source}\n"
+                    f"EN: {english}\n"
+                    f"ES: {spanish}"
+                )
+
+            history_view.setPlainText("\n\n".join(blocks))
+
+        layout.addWidget(history_view)
+
+        close_button = QPushButton("Cerrar")
+        close_button.setStyleSheet(PILL_STYLE)
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button, alignment=Qt.AlignmentFlag.AlignRight)
+
+        dialog.exec()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
