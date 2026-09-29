@@ -23,6 +23,35 @@ from config import (
 )
 from translator import translate_text
 
+
+def _patch_realtime_stt_faster_whisper_shutdown():
+    """Compatibility fix for RealtimeSTT 1.1.2 + faster-whisper 1.2.1.
+
+    RealtimeSTT calls close() on the FasterWhisperEngine during shutdown,
+    but that engine does not expose a close method in the pinned version.
+    Provide the expected interface without changing the installed packages.
+    """
+    try:
+        from RealtimeSTT.transcription_engines.faster_whisper_engine import (
+            FasterWhisperEngine,
+        )
+    except (ImportError, ModuleNotFoundError):
+        return
+
+    if hasattr(FasterWhisperEngine, "close"):
+        return
+
+    def _close(engine):
+        model = getattr(engine, "model", None)
+        model_close = getattr(model, "close", None)
+        if callable(model_close):
+            model_close()
+
+    FasterWhisperEngine.close = _close
+
+
+_patch_realtime_stt_faster_whisper_shutdown()
+
 TARGET_SAMPLE_RATE = 16000
 LOOPBACK_BLOCK_FRAMES = 1536
 REALTIME_MODEL = "small"
