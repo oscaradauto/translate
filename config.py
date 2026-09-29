@@ -90,6 +90,26 @@ WHISPER_INITIAL_PROMPT = os.getenv(
 ASSISTANT_LANGUAGE = os.getenv("ASSISTANT_LANGUAGE", "en")
 AI_PROVIDER = os.getenv("AI_PROVIDER", "openai")
 
+# Stage 2 uses local Faster-Whisper for interview transcription and OpenAI only
+# for technical answers.
+OPENAI_ASSISTANT_MODEL = os.getenv(
+    "OPENAI_ASSISTANT_MODEL",
+    "gpt-5.6-sol",
+)
+ASSISTANT_MAX_OUTPUT_TOKENS = int(
+    os.getenv("ASSISTANT_MAX_OUTPUT_TOKENS", "260")
+)
+ASSISTANT_REASONING_EFFORT = os.getenv(
+    "ASSISTANT_REASONING_EFFORT",
+    "low",
+)
+INTERVIEW_CONTEXT_TURNS = int(
+    os.getenv("INTERVIEW_CONTEXT_TURNS", "10")
+)
+INTERVIEW_QUESTION_DEBOUNCE_SECONDS = float(
+    os.getenv("INTERVIEW_QUESTION_DEBOUNCE_SECONDS", "0.9")
+)
+
 
 def get_meeting_language() -> str:
     return MEETING_LANGUAGE
