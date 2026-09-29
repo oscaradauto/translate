@@ -230,11 +230,6 @@ class SubtitleTab(QWidget):
             f"color: {MUTED_DARK}; font-size: 10px; background: transparent;"
         )
 
-        participants = QLabel("~6 participants")
-        participants.setStyleSheet(
-            f"color: {MUTED}; font-size: 11px; background: transparent;"
-        )
-
         self.history_button = QPushButton("▣  Historial")
         self.history_button.setCursor(
             Qt.CursorShape.PointingHandCursor
@@ -256,8 +251,6 @@ class SubtitleTab(QWidget):
         header.addWidget(self.status_label)
         header.addStretch()
         header.addWidget(language)
-        header.addWidget(separator)
-        header.addWidget(participants)
         header.addSpacing(6)
         header.addWidget(self.history_button)
         header.addWidget(self.start_button)
