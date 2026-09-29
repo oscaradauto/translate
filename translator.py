@@ -15,13 +15,14 @@ OLLAMA_ENDPOINT = os.environ.get(
     "http://localhost:11434/api/generate",
 )
 
-# Gemma 2B está orientado a lenguaje natural, por lo que es una mejor base
-# para traducción que un modelo especializado en código.
+# Gemma 2B está orientado a lenguaje natural y funciona mejor para esta tarea
+# que un modelo especializado en código.
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma2:2b")
-
-# Mantener el modelo cargado evita el coste de volver a cargarlo entre frases.
 OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "10m")
-REQUEST_TIMEOUT = float(os.environ.get("TRANSLATION_TIMEOUT_SECONDS", "8.0"))
+
+# Gemma puede tardar más en el primer request mientras carga el modelo en RAM.
+# El timeout debe cubrir esa carga sin hacer que una traducción desaparezca.
+REQUEST_TIMEOUT = float(os.environ.get("TRANSLATION_TIMEOUT_SECONDS", "30.0"))
 
 _client_lock = threading.Lock()
 
@@ -39,16 +40,14 @@ Rules:
   method names, API names, technologies, cloud services, and code identifiers
   unchanged when appropriate.
 - Preserve names of people.
-- Keep common technical terms in English when that is how they are normally
-  used by software teams (for example: pull request, deploy, endpoint, commit,
-  rollback, pipeline, build, branch, merge, framework).
+- Keep common technical terms in English when that is how software teams
+  normally use them (pull request, deploy, endpoint, commit, rollback,
+  pipeline, build, branch, merge, framework).
 """
 
-# Gemma puede generar una respuesta limpia, pero limitamos su salida para
-# evitar explicaciones accidentales y mantener baja la latencia.
 OLLAMA_OPTIONS = {
     "temperature": 0.0,
-    "num_predict": 128,
+    "num_predict": 96,
 }
 
 
@@ -76,10 +75,11 @@ def translate_text(text, source="EN", target="ES"):
     )
 
     try:
-        # Ollama local no necesita múltiples requests concurrentes para una
-        # misma traducción; serializarlos evita cargar innecesariamente la CPU.
         with _client_lock:
-            with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+            with urllib.request.urlopen(
+                request,
+                timeout=REQUEST_TIMEOUT,
+            ) as response:
                 body = json.loads(response.read().decode("utf-8"))
 
         content = body.get("response", "")
