@@ -100,7 +100,7 @@ class Bridge(QObject):
     status_changed = pyqtSignal(str)
     subtitle_partial = pyqtSignal(str, str)
     subtitle_ready = pyqtSignal(str, str, int)
-    subtitle_translated = pyqtSignal(str, str, int)
+    subtitle_translated = pyqtSignal(str, str, int, bool)
 
 
 class OverlayWindow(QWidget):
@@ -330,8 +330,15 @@ class OverlayWindow(QWidget):
             "on_subtitle": lambda source, text, segment_id: (
                 self.bridge.subtitle_ready.emit(source, text, segment_id)
             ),
-            "on_subtitle_translated": lambda source, text, segment_id: (
-                self.bridge.subtitle_translated.emit(source, text, segment_id)
+            "on_subtitle_translated": (
+                lambda source, text, segment_id, incremental: (
+                    self.bridge.subtitle_translated.emit(
+                        source,
+                        text,
+                        segment_id,
+                        incremental,
+                    )
+                )
             ),
         }
 
@@ -544,7 +551,10 @@ class OverlayWindow(QWidget):
             self._partial_entries[source] = entry
 
         entry["english"].setText(text)
-        entry["spanish"].setText("")
+
+        # No borramos la última traducción incremental mientras el inglés crece.
+        if not entry["spanish"].text():
+            entry["spanish"].setText("Traduciendo...")
 
         self._scroll_to_bottom()
 
@@ -563,11 +573,13 @@ class OverlayWindow(QWidget):
             entry = self._ensure_entry(source, segment_id)
 
         entry["english"].setText(text)
-        entry["spanish"].setText("Traduciendo...")
-        entry["spanish"].setStyleSheet(
-            "color: #718092; font-size: 13px; font-style: italic; "
-            "background: transparent;"
-        )
+
+        if not entry["spanish"].text() or entry["spanish"].text() == "Traduciendo...":
+            entry["spanish"].setText("Traduciendo...")
+            entry["spanish"].setStyleSheet(
+                "color: #718092; font-size: 13px; font-style: italic; "
+                "background: transparent;"
+            )
 
         history_key = self._entry_key(source, segment_id)
         history_item = {
@@ -575,24 +587,39 @@ class OverlayWindow(QWidget):
             "source": source,
             "time": _now(),
             "english": text,
-            "spanish": "",
+            "spanish": (
+                ""
+                if entry["spanish"].text() == "Traduciendo..."
+                else entry["spanish"].text()
+            ),
         }
         self._history_index[history_key] = len(self._history)
         self._history.append(history_item)
 
         self._scroll_to_bottom()
 
-    def _on_subtitle_translated(self, source, text, segment_id):
-        entry = self._ensure_entry(source, segment_id)
+    def _on_subtitle_translated(self, source, text, segment_id, incremental):
+        key = self._entry_key(source, segment_id)
+
+        # segment_id=0 representa una traducción parcial. La tarjeta puede haber
+        # pasado a su ID definitivo si el inglés terminó mientras Gemma respondía.
+        if incremental and segment_id == 0:
+            entry = self._partial_entries.get(source)
+            if entry is None:
+                return
+        else:
+            entry = self._ensure_entry(source, segment_id)
+
         entry["spanish"].setStyleSheet(
             "color: #d3dbe4; font-size: 13px; background: transparent;"
         )
         entry["spanish"].setText(text)
 
-        history_key = self._entry_key(source, segment_id)
-        history_position = self._history_index.get(history_key)
-        if history_position is not None:
-            self._history[history_position]["spanish"] = text
+        if not incremental:
+            history_key = self._entry_key(source, segment_id)
+            history_position = self._history_index.get(history_key)
+            if history_position is not None:
+                self._history[history_position]["spanish"] = text
 
         self._scroll_to_bottom()
 
