@@ -1,59 +1,32 @@
-import threading
+"""Configuración de la V2.0 - Meeting Subtitles.
 
-LANGUAGE_MODE = "en"  # "en" o "es", se setea desde la UI
-ASSISTANT_ENABLED = True  # True o False, se setea desde la UI
-AI_PROVIDER = "deepseek"  # "gemini" , "github_models", "ollama", "deepseek"
+La primera etapa de V2 está dedicada exclusivamente a subtítulos en reuniones.
+No se carga ni se configura ningún agente de IA aquí.
+"""
 
+import os
 
-ASSISTANT_LISTEN_MODE = "ambos"
+MEETING_LANGUAGE = "en"
+TRANSLATION_LANGUAGE = "es"
 
-PROVIDER_DISPLAY_NAMES = {
-    "gemini": "Gemini",
-    "github_models": "GitHub Models",
-    "ollama": "Ollama (Local)",
-    "deepseek": "DeepSeek",
-}
+# Índice opcional del micrófono. Puede sobrescribirse con la variable de entorno
+# MIC_DEVICE_INDEX para evitar depender de un índice fijo en otra máquina.
+MIC_DEVICE_INDEX = int(os.getenv("MIC_DEVICE_INDEX", "1"))
 
-native_model_lock = threading.Lock()
+# Modelo usado por Faster-Whisper para el audio de sistema.
+WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "small")
+WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
+WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
 
-
-def set_language_mode(mode):
-    global LANGUAGE_MODE
-    LANGUAGE_MODE = mode
-
-
-def get_language_mode():
-    return LANGUAGE_MODE
+# El subtítulo en inglés debe aparecer sin esperar la traducción.
+TRANSLATION_TIMEOUT = float(os.getenv("TRANSLATION_TIMEOUT", "4.0"))
 
 
-def set_assistant_enabled(enabled):
-    global ASSISTANT_ENABLED
-    ASSISTANT_ENABLED = enabled
+def get_meeting_language():
+    return MEETING_LANGUAGE
 
 
-def get_assistant_enabled():
-    return ASSISTANT_ENABLED
-
-
-def set_ai_provider(name):
-    global AI_PROVIDER
-    AI_PROVIDER = name
-
-
-def get_ai_provider_name():
-    return AI_PROVIDER
-
-
-def get_ai_provider_display_name():
-    return PROVIDER_DISPLAY_NAMES.get(AI_PROVIDER, AI_PROVIDER)
-
-
-def set_assistant_listen_mode(mode):
-    global ASSISTANT_LISTEN_MODE
-    if mode not in ("compañeros", "yo", "ambos"):
-        mode = "ambos"
-    ASSISTANT_LISTEN_MODE = mode
-
-
-def get_assistant_listen_mode():
-    return ASSISTANT_LISTEN_MODE
+def set_meeting_language(language):
+    global MEETING_LANGUAGE
+    if language in ("en", "es"):
+        MEETING_LANGUAGE = language
