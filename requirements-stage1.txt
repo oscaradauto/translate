@@ -1,9 +1,9 @@
-# Stage 1 runtime
+# Stage 1 - local English live subtitles
 PyQt6
 numpy
 scipy
 soundcard
 PyAudio
 webrtcvad-wheels
-websocket-client
+faster-whisper
 python-dotenv
