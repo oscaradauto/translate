@@ -18,6 +18,8 @@ from RealtimeSTT import AudioToTextRecorder
 
 from config import (
     MIC_DEVICE_INDEX,
+    REALTIME_COMPUTE_TYPE,
+    REALTIME_DEVICE,
     TRANSLATION_TIMEOUT,
     get_meeting_language,
 )
@@ -86,6 +88,8 @@ class RealtimeMicStreamer:
             model=REALTIME_MODEL,
             language=get_meeting_language(),
             spinner=False,
+            compute_type=REALTIME_COMPUTE_TYPE,
+            device=REALTIME_DEVICE,
             enable_realtime_transcription=True,
             on_realtime_transcription_update=self._on_partial,
             use_microphone=True,
