@@ -6,6 +6,7 @@ microphone and system-audio captions do not compete for CPU/GPU resources.
 
 from __future__ import annotations
 
+import re
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Callable
@@ -46,6 +47,9 @@ class LocalWhisperTranscriber:
         self._model: WhisperModel | None = None
         self._executor: ThreadPoolExecutor | None = None
         self._partial_inflight: set[tuple[str, int]] = set()
+        self._partial_pending: dict[tuple[str, int], bytes] = {}
+        self._partial_text: dict[tuple[str, int], str] = {}
+        self._finalizing: set[tuple[str, int]] = set()
         self._lock = threading.Lock()
         self._running = False
 
@@ -84,25 +88,47 @@ class LocalWhisperTranscriber:
         segment_id: int,
         pcm16: bytes,
     ) -> bool:
-        """Transcribe a snapshot of the current utterance.
+        """Queue the newest rolling audio window for a live caption.
 
-        Only one partial inference per source/segment is allowed at a time. This
-        prevents a slow CPU from building a backlog of stale partial captions.
+        There is never more than one queued partial per segment. If Whisper is
+        still busy, the older waiting snapshot is replaced by the newest one.
+        This "latest wins" policy prevents realtime captions from falling
+        further and further behind the meeting.
         """
         if not self._running or not pcm16 or self._executor is None:
             return False
 
         key = (source, segment_id)
         with self._lock:
-            if key in self._partial_inflight:
+            if key in self._finalizing:
                 return False
+
+            if key in self._partial_inflight:
+                self._partial_pending[key] = pcm16
+                return True
+
             self._partial_inflight.add(key)
 
-        future = self._executor.submit(self._transcribe, pcm16)
+        self._launch_partial(key, source, segment_id, pcm16)
+        return True
+
+    def _launch_partial(
+        self,
+        key: tuple[str, int],
+        source: str,
+        segment_id: int,
+        pcm16: bytes,
+    ) -> None:
+        executor = self._executor
+        if executor is None or not self._running:
+            with self._lock:
+                self._partial_inflight.discard(key)
+            return
+
+        future = executor.submit(self._transcribe, pcm16)
         future.add_done_callback(
             lambda f: self._finish_partial(key, source, segment_id, f)
         )
-        return True
 
     def submit_final(
         self,
@@ -112,6 +138,11 @@ class LocalWhisperTranscriber:
     ) -> bool:
         if not self._running or not pcm16 or self._executor is None:
             return False
+
+        key = (source, segment_id)
+        with self._lock:
+            self._finalizing.add(key)
+            self._partial_pending.pop(key, None)
 
         future = self._executor.submit(self._transcribe, pcm16)
         future.add_done_callback(
@@ -129,6 +160,9 @@ class LocalWhisperTranscriber:
 
         with self._lock:
             self._partial_inflight.clear()
+            self._partial_pending.clear()
+            self._partial_text.clear()
+            self._finalizing.clear()
 
         self._model = None
 
@@ -172,20 +206,37 @@ class LocalWhisperTranscriber:
         segment_id: int,
         future: Future,
     ) -> None:
-        with self._lock:
-            self._partial_inflight.discard(key)
-
-        if not self._running:
-            return
-
         try:
             text = future.result().strip()
         except Exception as exc:
+            text = ""
             self._report_error(source, exc)
-            return
 
-        if text:
-            self.on_partial(source, text, segment_id)
+        pending: bytes | None = None
+        should_emit = False
+        merged = ""
+
+        with self._lock:
+            if self._running and text:
+                previous = self._partial_text.get(key, "")
+                merged = self._merge_incremental_text(previous, text)
+                self._partial_text[key] = merged
+                should_emit = True
+
+            # If the final transcription has already been requested, do not
+            # launch another partial. Otherwise immediately process the newest
+            # snapshot that arrived while Whisper was busy.
+            if key not in self._finalizing:
+                pending = self._partial_pending.pop(key, None)
+
+            if pending is None:
+                self._partial_inflight.discard(key)
+
+        if should_emit:
+            self.on_partial(source, merged, segment_id)
+
+        if pending is not None and self._running:
+            self._launch_partial(key, source, segment_id, pending)
 
     def _finish_final(
         self,
@@ -193,17 +244,57 @@ class LocalWhisperTranscriber:
         segment_id: int,
         future: Future,
     ) -> None:
-        if not self._running:
-            return
+        key = (source, segment_id)
 
         try:
             text = future.result().strip()
         except Exception as exc:
+            text = ""
             self._report_error(source, exc)
-            return
 
-        if text:
+        with self._lock:
+            self._partial_pending.pop(key, None)
+            self._partial_inflight.discard(key)
+            self._partial_text.pop(key, None)
+            self._finalizing.discard(key)
+
+        if self._running and text:
             self.on_final(source, text, segment_id)
+
+    @staticmethod
+    def _merge_incremental_text(previous: str, current: str) -> str:
+        """Merge overlapping rolling-window transcripts into one live caption."""
+        previous = previous.strip()
+        current = current.strip()
+
+        if not previous:
+            return current
+        if not current:
+            return previous
+
+        if current.casefold().startswith(previous.casefold()):
+            return current
+        if current.casefold() in previous.casefold():
+            return previous
+
+        prev_words = previous.split()
+        curr_words = current.split()
+
+        def normalized(word: str) -> str:
+            return re.sub(r"[^a-z0-9]+", "", word.casefold())
+
+        max_overlap = min(14, len(prev_words), len(curr_words))
+        for count in range(max_overlap, 0, -1):
+            left = [normalized(w) for w in prev_words[-count:]]
+            right = [normalized(w) for w in curr_words[:count]]
+            if left == right and any(left):
+                suffix = " ".join(curr_words[count:])
+                return previous if not suffix else f"{previous} {suffix}"
+
+        # Whisper occasionally rewrites the rolling window enough that there is
+        # no exact overlap. Keeping both fragments is preferable to replacing
+        # already-visible text and making the caption jump backwards.
+        return f"{previous} {current}".strip()
 
     def _notify_status(self, text: str) -> None:
         if self.on_status:
