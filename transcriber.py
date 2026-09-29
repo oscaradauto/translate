@@ -1,63 +1,69 @@
+"""Transcripción local con Faster-Whisper.
+
+El modelo se carga de forma perezosa para que importar la aplicación no bloquee
+la interfaz ni consuma memoria antes de iniciar la captura.
+"""
+
 import threading
 
 from faster_whisper import WhisperModel
-from config import get_language_mode
 
-print("Cargando modelo Whisper...")
-MODEL_SIZE = "small"
-model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
-print(f"Modelo Whisper '{MODEL_SIZE}' cargado.")
+from config import (
+    WHISPER_COMPUTE_TYPE,
+    WHISPER_DEVICE,
+    WHISPER_MODEL_SIZE,
+)
 
+_model = None
+_model_lock = threading.Lock()
 _transcribe_lock = threading.Lock()
 
 TECH_VOCAB_HINT = (
-    # Java / Backend
-    "Java, Java, programación en Java, lenguaje Java, " 
     "Java, JDK, JVM, Spring Boot, Spring Framework, Hibernate, Maven, Gradle, "
-    "microservicios, microservices, API REST, endpoint, DTO, JPA, JWT, OAuth, "
-    "singleton, patrón de diseño, design pattern, SOLID, DRY, KISS, "
-    "inyección de dependencias, dependency injection, "
-    # Concurrencia / Hilos
-    "hilos, threads, concurrencia, concurrency, paralelismo, parallelism, "
-    "deadlock, race condition, mutex, semáforo, semaphore, thread pool, "
-    "ExecutorService, CompletableFuture, async, asincrono, sincrono, "
-    # Bases de datos
-    "base de datos, database, SQL, NoSQL, MongoDB, PostgreSQL, MySQL, Redis, "
-    "índice, index, query, transacción, transaction, ACID, sharding, "
-    # Cloud / Azure
-    "Azure, AWS, Google Cloud, contenedor, container, Docker, Kubernetes, "
-    "App Service, Azure Functions, Blob Storage, "
-    # CI/CD
-    "CI/CD, continuous integration, continuous delivery, continuous deployment, "
-    "integración continua, entrega continua, despliegue continuo, "
-    "pipeline, build, deploy, rollback, GitHub Actions, GitLab CI, Jenkins, "
-    "Azure DevOps, Azure Pipelines, Bitbucket Pipelines, Travis CI, CircleCI, "
-    "artifact, artefacto, runner, staging, producción, production, "
-    "quality gate, code review, pull request, merge request, "
-    "unit test, integration test, test coverage, "
-    "Terraform, infraestructura como código, infrastructure as code, "
-    "SonarQube, linting, versionado semántico, semantic versioning, "
-    # Arquitectura general
-    "arquitectura hexagonal, clean architecture, DDD, event driven, "
-    "message broker, Kafka, RabbitMQ, cache, caching, escalabilidad, scalability."
+    "microservices, REST API, endpoint, DTO, JPA, JWT, OAuth, singleton, SOLID, "
+    "dependency injection, threads, concurrency, parallelism, deadlock, race condition, "
+    "ExecutorService, CompletableFuture, async, database, SQL, NoSQL, MongoDB, "
+    "PostgreSQL, MySQL, Redis, Kafka, RabbitMQ, Azure, AWS, Google Cloud, Docker, "
+    "Kubernetes, App Service, Azure Functions, CI/CD, pipeline, build, deploy, rollback, "
+    "GitHub Actions, Jenkins, unit test, integration test, test coverage, Terraform, "
+    "SonarQube, code review, pull request, architecture, DDD, event driven, cache, scalability."
 )
 
 
-def transcribe_audio(audio_np):
-    """
-    Transcribe un array de audio (float32, 16kHz, mono).
-    Usa el idioma seleccionado en la UI (config.LANGUAGE_MODE).
-    """
-    lang = get_language_mode()  # "en" o "es"
+def _get_model():
+    global _model
+
+    if _model is None:
+        with _model_lock:
+            if _model is None:
+                print(f"Cargando Faster-Whisper '{WHISPER_MODEL_SIZE}'...")
+                _model = WhisperModel(
+                    WHISPER_MODEL_SIZE,
+                    device=WHISPER_DEVICE,
+                    compute_type=WHISPER_COMPUTE_TYPE,
+                )
+                print("Faster-Whisper cargado.")
+
+    return _model
+
+
+def transcribe_audio(audio_np, language="en"):
+    """Transcribe un segmento mono a 16 kHz y devuelve texto limpio."""
+    if audio_np is None or len(audio_np) == 0:
+        return ""
+
     with _transcribe_lock:
-        segments, info = model.transcribe(
+        segments, _ = _get_model().transcribe(
             audio_np,
-            language=lang,
-            beam_size=5,
+            language=language,
+            beam_size=3,
             condition_on_previous_text=False,
             vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=300),
+            vad_parameters={"min_silence_duration_ms": 300},
             initial_prompt=TECH_VOCAB_HINT,
         )
-        text = " ".join([seg.text.strip() for seg in segments]).strip()
-    return text
+        return " ".join(
+            segment.text.strip()
+            for segment in segments
+            if segment.text and segment.text.strip()
+        ).strip()
