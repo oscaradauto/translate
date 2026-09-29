@@ -19,7 +19,6 @@ from config import (
     MIC_DEVICE_INDEX,
     REALTIME_COMPUTE_TYPE,
     REALTIME_DEVICE,
-    TRANSLATION_TIMEOUT,
     get_meeting_language,
 )
 from translator import translate_text
@@ -106,18 +105,15 @@ class RealtimeMicStreamer:
             except Exception:
                 pass
 
-            try:
-                recorder.realtime_transcription_model = None
-            except Exception:
-                pass
+        # Primero liberamos el hilo que puede estar bloqueado en recorder.text().
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=3.0)
 
+        if recorder:
             try:
                 recorder.shutdown()
             except Exception as exc:
                 print(f"[YOU] RealtimeSTT shutdown error: {exc}")
-
-        if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=3.0)
 
         self.thread = None
         self.recorder = None
@@ -224,11 +220,6 @@ class RealtimeSystemAudioStreamer:
 
         try:
             recorder.abort()
-        except Exception:
-            pass
-
-        try:
-            recorder.realtime_transcription_model = None
         except Exception:
             pass
 
