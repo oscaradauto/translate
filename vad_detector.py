@@ -20,7 +20,14 @@ import webrtcvad
 from scipy.signal import resample_poly
 
 from config import (
+    MEETING_MIN_VOICED_MS,
+    MEETING_SPEECH_START_MS,
+    MEETING_VAD_MODE,
     MIC_DEVICE_INDEX,
+    MIC_MIN_DBFS,
+    MIC_MIN_VOICED_MS,
+    MIC_SPEECH_START_MS,
+    MIC_VAD_MODE,
     SUBTITLE_MAX_UTTERANCE_SECONDS,
     SUBTITLE_PARTIAL_INTERVAL_SECONDS,
     SUBTITLE_SPEECH_END_MS,
@@ -32,7 +39,6 @@ PREFERRED_MIC_SAMPLE_RATE = 48000
 FALLBACK_MIC_SAMPLE_RATE = 16000
 SYSTEM_SAMPLE_RATE = 48000
 VAD_FRAME_MS = 30
-VAD_MODE = 2
 PRE_ROLL_MS = 240
 
 _PRE_ROLL_FRAMES = max(1, PRE_ROLL_MS // VAD_FRAME_MS)
@@ -71,6 +77,22 @@ def _is_speech(pcm16: bytes, sample_rate: int, vad: webrtcvad.Vad) -> bool:
         return False
 
 
+def _dbfs(pcm16: bytes) -> float:
+    """Return RMS level in dBFS for a PCM16 mono frame."""
+    if not pcm16:
+        return -96.0
+
+    samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32)
+    if samples.size == 0:
+        return -96.0
+
+    rms = float(np.sqrt(np.mean(samples * samples)))
+    if rms <= 1.0:
+        return -96.0
+
+    return 20.0 * np.log10(rms / 32768.0)
+
+
 class _SpeechSegmenter:
     """Builds stable utterances and periodically requests live partial captions."""
 
@@ -79,10 +101,20 @@ class _SpeechSegmenter:
         source: str,
         transcriber: LocalWhisperTranscriber,
         next_segment_id: Callable[[], int],
+        speech_start_ms: int,
+        min_voiced_ms: int,
     ) -> None:
         self.source = source
         self.transcriber = transcriber
         self.next_segment_id = next_segment_id
+        self._speech_start_frames = max(
+            1,
+            int(np.ceil(speech_start_ms / VAD_FRAME_MS)),
+        )
+        self._min_voiced_frames = max(
+            1,
+            int(np.ceil(min_voiced_ms / VAD_FRAME_MS)),
+        )
 
         self._pre_roll: deque[bytes] = deque(maxlen=_PRE_ROLL_FRAMES)
         self._frames: list[bytes] = []
@@ -90,6 +122,8 @@ class _SpeechSegmenter:
         self._segment_id: int | None = None
         self._last_speech_time = 0.0
         self._last_partial_time = 0.0
+        self._speech_candidate_frames = 0
+        self._voiced_frames = 0
 
     def process(self, pcm16_target: bytes, is_speech: bool, now: float) -> None:
         if not pcm16_target:
@@ -97,13 +131,24 @@ class _SpeechSegmenter:
 
         if not self._speech_active:
             self._pre_roll.append(pcm16_target)
-            if not is_speech:
+
+            if is_speech:
+                self._speech_candidate_frames += 1
+            else:
+                self._speech_candidate_frames = 0
+                return
+
+            # One noisy frame is not enough to create a caption. Requiring
+            # consecutive voiced frames prevents false YOU segments.
+            if self._speech_candidate_frames < self._speech_start_frames:
                 return
 
             self._speech_active = True
             self._segment_id = self.next_segment_id()
             self._frames = list(self._pre_roll)
             self._pre_roll.clear()
+            self._voiced_frames = self._speech_candidate_frames
+            self._speech_candidate_frames = 0
             self._last_speech_time = now
             self._last_partial_time = now
             return
@@ -111,6 +156,7 @@ class _SpeechSegmenter:
         self._frames.append(pcm16_target)
 
         if is_speech:
+            self._voiced_frames += 1
             self._last_speech_time = now
 
         duration_seconds = (
@@ -118,7 +164,7 @@ class _SpeechSegmenter:
         )
 
         if (
-            duration_seconds >= 0.65
+            self._voiced_frames >= self._min_voiced_frames
             and now - self._last_partial_time
             >= SUBTITLE_PARTIAL_INTERVAL_SECONDS
         ):
@@ -149,15 +195,23 @@ class _SpeechSegmenter:
     def _finalize(self) -> None:
         segment_id = self._segment_id
         frames = self._frames
+        voiced_frames = self._voiced_frames
 
         self._speech_active = False
         self._segment_id = None
         self._frames = []
         self._last_speech_time = 0.0
         self._last_partial_time = 0.0
+        self._speech_candidate_frames = 0
+        self._voiced_frames = 0
         self._pre_roll.clear()
 
         if segment_id is None or not frames:
+            return
+
+        # Do not send tiny noise bursts to Whisper. Those bursts are a common
+        # source of hallucinations such as "So," or "Now," on silent mics.
+        if voiced_frames < self._min_voiced_frames:
             return
 
         self.transcriber.submit_final(
@@ -237,11 +291,13 @@ class LocalMicStreamer:
 
     def _capture_loop(self) -> None:
         assert self.sample_rate is not None
-        vad = webrtcvad.Vad(VAD_MODE)
+        vad = webrtcvad.Vad(MIC_VAD_MODE)
         segmenter = _SpeechSegmenter(
             "YOU",
             self.transcriber,
             self.next_segment_id,
+            speech_start_ms=MIC_SPEECH_START_MS,
+            min_voiced_ms=MIC_MIN_VOICED_MS,
         )
         frame_count = int(self.sample_rate * VAD_FRAME_MS / 1000)
 
@@ -252,10 +308,13 @@ class LocalMicStreamer:
                     exception_on_overflow=False,
                 )
                 now = time.monotonic()
-                speech = _is_speech(pcm16, self.sample_rate, vad)
                 target_pcm16 = _resample_pcm16(
                     pcm16,
                     self.sample_rate,
+                )
+                speech = (
+                    _is_speech(target_pcm16, TARGET_SAMPLE_RATE, vad)
+                    and _dbfs(target_pcm16) >= MIC_MIN_DBFS
                 )
                 segmenter.process(target_pcm16, speech, now)
         except Exception as exc:
@@ -322,11 +381,13 @@ class LocalSystemAudioStreamer:
         self.thread.start()
 
     def _capture_loop(self) -> None:
-        vad = webrtcvad.Vad(VAD_MODE)
+        vad = webrtcvad.Vad(MEETING_VAD_MODE)
         segmenter = _SpeechSegmenter(
             "MEETING",
             self.transcriber,
             self.next_segment_id,
+            speech_start_ms=MEETING_SPEECH_START_MS,
+            min_voiced_ms=MEETING_MIN_VOICED_MS,
         )
 
         try:
@@ -353,14 +414,14 @@ class LocalSystemAudioStreamer:
                         else data
                     )
                     pcm16 = _float32_to_pcm16(mono)
-                    speech = _is_speech(
-                        pcm16,
-                        SYSTEM_SAMPLE_RATE,
-                        vad,
-                    )
                     target_pcm16 = _resample_pcm16(
                         pcm16,
                         SYSTEM_SAMPLE_RATE,
+                    )
+                    speech = _is_speech(
+                        target_pcm16,
+                        TARGET_SAMPLE_RATE,
+                        vad,
                     )
                     segmenter.process(
                         target_pcm16,
