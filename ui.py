@@ -112,6 +112,7 @@ class OverlayWindow(QWidget):
         self._entry_order = []
         self._partial_entries = {}
         self._max_entries = 60
+        self._starting = False
 
         self._setup_window()
         self._setup_ui()
@@ -295,13 +296,22 @@ class OverlayWindow(QWidget):
         QTimer.singleShot(100, self._on_start_clicked)
 
     def _on_start_clicked(self):
+        if self._starting:
+            return
+
         if self.controller:
             self._on_stop_clicked()
             return
 
+        self._starting = True
         self._clear_transcript()
+
+        # El arranque de audio puede tardar mientras se cargan RealtimeSTT,
+        # Whisper/VAD y los dispositivos. Bloqueamos el botón para evitar
+        # dobles clics y damos feedback inmediato al usuario.
         self.start_btn.setEnabled(False)
-        self.start_btn.setText("Cargando...")
+        self.start_btn.setText("⏳ Cargando...")
+        self._on_status_changed("Cargando...")
 
         callbacks = {
             "on_status": lambda text: self.bridge.status_changed.emit(text),
@@ -329,16 +339,34 @@ class OverlayWindow(QWidget):
             daemon=True,
         ).start()
 
-        self.start_btn.setText("■ Detener")
-        self.start_btn.setEnabled(True)
-
     def _on_stop_clicked(self):
         if not self.controller:
+            self._starting = False
+            self.start_btn.setText("▶ Iniciar")
+            self.start_btn.setEnabled(True)
             return
 
-        self.controller.stop()
+        self._starting = False
+        self.start_btn.setEnabled(False)
+        self.start_btn.setText("⏳ Deteniendo...")
+
+        controller = self.controller
         self.controller = None
-        self.start_btn.setText("▶ Iniciar")
+
+        def _stop_controller():
+            try:
+                controller.stop()
+            except Exception as exc:
+                print(f"[UI] Error deteniendo audio: {exc}")
+            finally:
+                self.bridge.status_changed.emit("Detenido")
+
+        threading.Thread(
+            target=_stop_controller,
+            name="subtitle-controller-stop",
+            daemon=True,
+        ).start()
+
         self._clear_transcript()
 
     def _clear_transcript(self):
@@ -459,7 +487,26 @@ class OverlayWindow(QWidget):
 
     def _on_status_changed(self, text):
         listening = text.startswith("Escuchando")
+        loading = text in ("Cargando...", "Preparando audio...")
+        error = text == "Error de audio"
         active = text not in ("Inactivo", "Detenido", "")
+
+        if listening:
+            self._starting = False
+            self.start_btn.setText("■ Detener")
+            self.start_btn.setEnabled(True)
+        elif loading:
+            self.start_btn.setText("⏳ Cargando...")
+            self.start_btn.setEnabled(False)
+        elif error:
+            self._starting = False
+            self.controller = None
+            self.start_btn.setText("▶ Iniciar")
+            self.start_btn.setEnabled(True)
+        elif text == "Detenido":
+            self._starting = False
+            self.start_btn.setText("▶ Iniciar")
+            self.start_btn.setEnabled(True)
 
         color = (
             "#5cb85c"
@@ -556,6 +603,7 @@ class OverlayWindow(QWidget):
                 print(f"[UI] Error cerrando audio: {exc}")
             self.controller = None
 
+        self._starting = False
         event.accept()
 
 
