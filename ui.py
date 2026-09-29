@@ -557,10 +557,28 @@ class OverlayWindow(QWidget):
 
         layout.addWidget(history_view)
 
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+
+        copy_button = QPushButton("📋 Copiar todo")
+        copy_button.setStyleSheet(PILL_STYLE)
+        copy_button.setEnabled(bool(self._history))
+
+        def copy_history():
+            clipboard = QApplication.clipboard()
+            clipboard.setText(history_view.toPlainText())
+            copy_button.setText("✓ Copiado")
+            QTimer.singleShot(1200, lambda: copy_button.setText("📋 Copiar todo"))
+
+        copy_button.clicked.connect(copy_history)
+        buttons.addWidget(copy_button)
+
         close_button = QPushButton("Cerrar")
         close_button.setStyleSheet(PILL_STYLE)
         close_button.clicked.connect(dialog.accept)
-        layout.addWidget(close_button, alignment=Qt.AlignmentFlag.AlignRight)
+        buttons.addWidget(close_button)
+
+        layout.addLayout(buttons)
 
         dialog.exec()
 
@@ -597,7 +615,7 @@ class OverlayWindow(QWidget):
             self.start_btn.setEnabled(False)
             self.close_btn.setEnabled(False)
             self.history_btn.setEnabled(False)
-            self.lang_combo.setEnabled(False)
+            self.language_label.setEnabled(False)
 
             controller = self.controller
             self.controller = None
