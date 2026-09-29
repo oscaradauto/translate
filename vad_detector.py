@@ -4,12 +4,10 @@ MICROPHONE  -> YOU
 SYSTEM AUDIO -> COMPANION
 
 No contiene lógica de agente ni detección de preguntas. La primera etapa de V2
-está dedicada exclusivamente a subtítulos y traducción incremental.
+está dedicada exclusivamente a subtítulos en inglés en tiempo real.
 """
 
 import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import soundcard as sc
@@ -21,8 +19,6 @@ from config import (
     REALTIME_DEVICE,
     get_meeting_language,
 )
-from translator import translate_text
-
 
 def _patch_realtime_stt_faster_whisper_shutdown():
     """Compatibility fix for RealtimeSTT 1.1.2 + faster-whisper 1.2.1.
@@ -58,8 +54,6 @@ REALTIME_MODEL = "small"
 REALTIME_POST_SPEECH_SILENCE = 0.4
 REALTIME_PROCESSING_PAUSE = 0.2
 
-INCREMENTAL_TRANSLATION_INTERVAL = 0.9
-MIN_TRANSLATION_CHANGE_CHARS = 4
 
 
 def _resample_linear(block, orig_sr, target_sr):
@@ -280,7 +274,7 @@ class RealtimeSystemAudioStreamer:
 
 
 class ListenerController:
-    """Orquesta subtítulos, traducción incremental y traducción final."""
+    """Orquesta captura de audio y subtítulos en inglés."""
 
     def __init__(self, callbacks, mic_device=MIC_DEVICE_INDEX):
         self.callbacks = callbacks
@@ -292,125 +286,15 @@ class ListenerController:
         self._segment_counter = 0
         self._counter_lock = threading.Lock()
 
-        self._translation_pool = ThreadPoolExecutor(
-            max_workers=2,
-            thread_name_prefix="subtitle-translation",
-        )
-
-        self._translation_lock = threading.Lock()
-        self._translation_state = {
-            "YOU": {
-                "last_submitted_text": "",
-                "last_submit_time": 0.0,
-                "generation": 0,
-                "in_flight": False,
-                "pending": None,
-            },
-            "COMPANION": {
-                "last_submitted_text": "",
-                "last_submit_time": 0.0,
-                "generation": 0,
-                "in_flight": False,
-                "pending": None,
-            },
-        }
-
     def _next_segment_id(self):
         with self._counter_lock:
             self._segment_counter += 1
             return self._segment_counter
 
-    def _submit_translation(self, source, text, segment_id, is_final=False):
-        text = text.strip()
-        if not text:
-            return
-
-        with self._translation_lock:
-            state = self._translation_state[source]
-
-            if state["in_flight"]:
-                state["pending"] = (text, segment_id, is_final)
-                state["generation"] += 1
-                return
-
-            state["generation"] += 1
-            generation = state["generation"]
-            state["last_submitted_text"] = text
-            state["last_submit_time"] = time.monotonic()
-            state["in_flight"] = True
-            state["pending"] = None
-
-        future = self._translation_pool.submit(
-            translate_text,
-            text,
-            "EN",
-            "ES",
-        )
-
-        def _translation_done(done):
-            try:
-                translated = done.result()
-            except Exception as exc:
-                print(f"[Translation] Error: {exc}")
-                translated = ""
-
-            next_request = None
-
-            with self._translation_lock:
-                state = self._translation_state[source]
-                state["in_flight"] = False
-                current_generation = state["generation"]
-
-                if self.running and state["pending"] is not None:
-                    next_request = state["pending"]
-                    state["pending"] = None
-
-            if translated and self.running and generation == current_generation:
-                self._emit(
-                    "on_subtitle_translated",
-                    source,
-                    translated,
-                    segment_id,
-                    not is_final,
-                )
-
-            if next_request and self.running:
-                self._submit_translation(
-                    source,
-                    next_request[0],
-                    next_request[1],
-                    next_request[2],
-                )
-
-        future.add_done_callback(_translation_done)
-
     def _on_partial(self, source_label, text):
         if not self.running or not text:
             return
-
         self._emit("on_subtitle_partial", source_label, text)
-
-        now = time.monotonic()
-        text = text.strip()
-
-        with self._translation_lock:
-            state = self._translation_state[source_label]
-            elapsed = now - state["last_submit_time"]
-            changed = abs(
-                len(text) - len(state["last_submitted_text"])
-            ) >= MIN_TRANSLATION_CHANGE_CHARS
-
-        if (
-            elapsed >= INCREMENTAL_TRANSLATION_INTERVAL
-            and changed
-            and len(text) >= 4
-        ):
-            self._submit_translation(
-                source_label,
-                text,
-                segment_id=0,
-                is_final=False,
-            )
 
     def _on_final(self, source_label, text):
         if not self.running or len(text.strip()) < 2:
@@ -419,27 +303,11 @@ class ListenerController:
         segment_id = self._next_segment_id()
         self._emit("on_subtitle", source_label, text.strip(), segment_id)
 
-        self._submit_translation(
-            source_label,
-            text,
-            segment_id=segment_id,
-            is_final=True,
-        )
-
     def start(self):
         if self.running:
             return
 
         self.running = True
-
-        with self._translation_lock:
-            for state in self._translation_state.values():
-                state["last_submitted_text"] = ""
-                state["last_submit_time"] = 0.0
-                state["generation"] = 0
-                state["in_flight"] = False
-                state["pending"] = None
-
         self._emit("on_status", "Preparando audio...")
 
         try:
@@ -468,7 +336,11 @@ class ListenerController:
         self._emit("on_status", "Escuchando (solo YOU)")
 
     def stop(self):
-        if not self.running and not self.mic_streamer and not self.loopback_streamer:
+        if (
+            not self.running
+            and not self.mic_streamer
+            and not self.loopback_streamer
+        ):
             return
 
         self.running = False
@@ -481,17 +353,6 @@ class ListenerController:
 
         self.mic_streamer = None
         self.loopback_streamer = None
-
-        with self._translation_lock:
-            for state in self._translation_state.values():
-                state["pending"] = None
-                state["in_flight"] = False
-
-        self._translation_pool.shutdown(wait=False, cancel_futures=True)
-        self._translation_pool = ThreadPoolExecutor(
-            max_workers=2,
-            thread_name_prefix="subtitle-translation",
-        )
 
         self._emit("on_status", "Detenido")
 
