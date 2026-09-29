@@ -352,7 +352,9 @@ class ListenerController:
         self._emit("on_status", "Preparando audio...")
 
         started = 0
+        last_error_status = "Error de audio"
 
+        streamer = None
         try:
             streamer = RealtimeMicStreamer(
                 self.mic_device,
@@ -364,13 +366,17 @@ class ListenerController:
             self.mic_streamer = streamer
             started += 1
         except Exception as exc:
-            try:
-                streamer.stop()
-            except Exception:
-                pass
+            if streamer is not None:
+                try:
+                    streamer.stop()
+                except Exception:
+                    pass
             self.mic_streamer = None
+            if "credit_balance_exhausted" in str(exc):
+                last_error_status = "API sin créditos"
             self._on_source_error("YOU", exc)
 
+        streamer = None
         try:
             streamer = RealtimeSystemAudioStreamer(
                 self._on_partial,
@@ -381,11 +387,14 @@ class ListenerController:
             self.loopback_streamer = streamer
             started += 1
         except Exception as exc:
-            try:
-                streamer.stop()
-            except Exception:
-                pass
+            if streamer is not None:
+                try:
+                    streamer.stop()
+                except Exception:
+                    pass
             self.loopback_streamer = None
+            if "credit_balance_exhausted" in str(exc):
+                last_error_status = "API sin créditos"
             self._on_source_error("COMPANION", exc)
 
         if started:
@@ -393,7 +402,7 @@ class ListenerController:
         else:
             self.running = False
             self.stop()
-            self._emit("on_status", "Error de audio")
+            self._emit("on_status", last_error_status)
 
     def _on_source_error(self, source: str, exc: Exception) -> None:
         # Session-level callbacks already report the root error. Avoid printing
