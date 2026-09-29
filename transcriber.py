@@ -1,3 +1,5 @@
+import threading
+
 from faster_whisper import WhisperModel
 from config import get_language_mode
 
@@ -5,6 +7,8 @@ print("Cargando modelo Whisper...")
 MODEL_SIZE = "small"
 model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
 print(f"Modelo Whisper '{MODEL_SIZE}' cargado.")
+
+_transcribe_lock = threading.Lock()
 
 TECH_VOCAB_HINT = (
     # Java / Backend
@@ -45,14 +49,15 @@ def transcribe_audio(audio_np):
     Usa el idioma seleccionado en la UI (config.LANGUAGE_MODE).
     """
     lang = get_language_mode()  # "en" o "es"
-    segments, info = model.transcribe(
-        audio_np,
-        language=lang,
-        beam_size=5,
-        condition_on_previous_text=False,
-        vad_filter=True,
-        vad_parameters=dict(min_silence_duration_ms=300),
-        initial_prompt=TECH_VOCAB_HINT,
-    )
-    text = " ".join([seg.text.strip() for seg in segments]).strip()
+    with _transcribe_lock:
+        segments, info = model.transcribe(
+            audio_np,
+            language=lang,
+            beam_size=5,
+            condition_on_previous_text=False,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=300),
+            initial_prompt=TECH_VOCAB_HINT,
+        )
+        text = " ".join([seg.text.strip() for seg in segments]).strip()
     return text

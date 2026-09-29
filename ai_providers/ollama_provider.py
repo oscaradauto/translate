@@ -1,10 +1,11 @@
 import requests
+from ai_providers.base import AIProvider
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 DEFAULT_MODEL = "qwen2.5-coder:1.5b"
 
 
-class OllamaProvider:
+class OllamaProvider(AIProvider):
     """
     Proveedor local usando Ollama (http://localhost:11434).
     Requiere tener Ollama corriendo (ya corre como servicio en Windows)

@@ -1,4 +1,5 @@
 import re
+import threading
 import unicodedata
 
 from config import get_language_mode
@@ -127,24 +128,33 @@ def is_question(text):
 
 def _truncate_to_max_sentences(text, max_sentences=3):
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    sentences = sentences[:max_sentences]
-    return " ".join(sentences).strip()
+    complete_sentences = [s for s in sentences if s.strip().endswith((".", "!", "?"))]
+
+    if not complete_sentences:
+        # Si no hay ni una oración completa (respuesta cortada muy pronto),
+        # se muestra el texto tal cual en vez de nada.
+        return text.strip()
+
+    complete_sentences = complete_sentences[:max_sentences]
+    return " ".join(complete_sentences).strip()
 
 
 conversation_history = []
 MAX_HISTORY_TURNS = 3
 
 _provider = None
+_provider_lock = threading.Lock()
 
 
 def _get_active_provider():
     global _provider
     from config import get_ai_provider_name
 
-    if _provider is None or getattr(_provider, "_provider_name", None) != get_ai_provider_name():
-        _provider = get_provider()
-        _provider._provider_name = get_ai_provider_name()
-    return _provider
+    with _provider_lock:
+        if _provider is None or getattr(_provider, "_provider_name", None) != get_ai_provider_name():
+            _provider = get_provider()
+            _provider._provider_name = get_ai_provider_name()
+        return _provider
 
 
 def warmup():
@@ -165,13 +175,13 @@ def answer_question(question):
 
     prompt = f"{context_section}{history_text}Usuario: {question}\nAsistente:"
 
-    text = _get_active_provider().generate(system_prompt, prompt, temperature=0.3, max_tokens=300)
+    text = _get_active_provider().generate(system_prompt, prompt, temperature=0.3, max_tokens=450)
 
     if not text:
-        # Fallback automático a Ollama si el proveedor principal falla
+        # Fallback automático a DeepSeek si el proveedor principal falla
         fallback = get_fallback_provider()
         if fallback:
-            print("[Assistant] Proveedor principal falló, usando fallback local (Ollama)...")
+            print("[Assistant] Proveedor principal falló, usando fallback en la nube (DeepSeek)...")
             text = fallback.generate(system_prompt, prompt, temperature=0.3, max_tokens=200)
 
     if not text:
@@ -182,4 +192,8 @@ def answer_question(question):
     conversation_history.append({"role": "user", "content": question})
     conversation_history.append({"role": "assistant", "content": answer})
 
+    # Recorta la lista para no crecer indefinidamente en sesiones largas
+    max_items = MAX_HISTORY_TURNS * 2
+    if len(conversation_history) > max_items:
+        del conversation_history[:-max_items]
     return answer

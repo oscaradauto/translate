@@ -2,7 +2,7 @@ import threading
 
 LANGUAGE_MODE = "en"  # "en" o "es", se setea desde la UI
 ASSISTANT_ENABLED = True  # True o False, se setea desde la UI
-AI_PROVIDER = "github_models"  # "gemini" , "github_models", "ollama"
+AI_PROVIDER = "deepseek"  # "gemini" , "github_models", "ollama", "deepseek"
 
 
 ASSISTANT_LISTEN_MODE = "ambos"
@@ -11,6 +11,7 @@ PROVIDER_DISPLAY_NAMES = {
     "gemini": "Gemini",
     "github_models": "GitHub Models",
     "ollama": "Ollama (Local)",
+    "deepseek": "DeepSeek",
 }
 
 native_model_lock = threading.Lock()

@@ -95,7 +95,8 @@ def _now():
 class Bridge(QObject):
     """Reenvía callbacks del hilo de audio hacia la UI (thread-safe con señales Qt)."""
     status_changed = pyqtSignal(str)
-    subtitle_ready = pyqtSignal(str, str, int)  # source, en_text, segment_id (sin traducción)
+    subtitle_ready = pyqtSignal(str, str, int)  # source, en_text, segment_id
+    subtitle_translated = pyqtSignal(str, str, int)  # source, es_text, segment_id
     subtitle_partial = pyqtSignal(str, str)  # source, en_text (en construcción)
     question_ready = pyqtSignal(str, str)
     assistant_state_changed = pyqtSignal(str)
@@ -126,7 +127,7 @@ class OverlayWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumWidth(720)
-        self.setMinimumHeight(280)
+        self.setMinimumHeight(390)
         self.move(60, 60)
 
     def _schedule_resize(self):
@@ -222,9 +223,17 @@ class OverlayWindow(QWidget):
         controls_bar.addWidget(self.close_btn)
         layout.addLayout(controls_bar)
 
-        # --- Tarjeta única de subtítulo (depende solo del idioma de reunión) ---
+        # --- Tarjetas de subtítulo: EN (inmediato) + ES (llega async después) ---
+        subtitle_row = QHBoxLayout()
+        subtitle_row.setSpacing(12)
+
         self.subtitle_card, self.subtitle_badge, self.subtitle_icon, self.subtitle_text, self.subtitle_time = \
             self._build_card("EN", "#4da6ff", "rgba(30,45,70,200)")
+        self.subtitle_es_card, self.subtitle_es_badge, self.subtitle_es_icon, self.subtitle_es_text, self.subtitle_es_time = \
+            self._build_card("ES", "#57c785", "rgba(20,45,35,200)")
+
+        subtitle_row.addWidget(self.subtitle_card)
+        subtitle_row.addWidget(self.subtitle_es_card)
 
         # --- Tarjetas de Pregunta/Respuesta (dependen solo del estado del asistente) ---
         cards_row = QHBoxLayout()
@@ -240,7 +249,7 @@ class OverlayWindow(QWidget):
         cards_row.addWidget(self.en_card)
         cards_row.addWidget(self.es_card)
 
-        layout.addWidget(self.subtitle_card)
+        layout.addLayout(subtitle_row)
         layout.addLayout(cards_row)
 
         # --- Historial colapsable ---
@@ -321,6 +330,10 @@ class OverlayWindow(QWidget):
         self.subtitle_text.setStyleSheet("color: #7a8a9a; font-size: 14px; font-style: italic;")
         self.subtitle_time.setText("")
 
+        self.subtitle_es_text.setText("La traducción aparecerá aquí...")
+        self.subtitle_es_text.setStyleSheet("color: #7a8a9a; font-size: 14px; font-style: italic;")
+        self.subtitle_es_time.setText("")
+
         self.en_text.setText("Esperando tu pregunta...")
         self.en_text.setStyleSheet("color: #7a8a9a; font-size: 14px; font-style: italic;")
         self.es_text.setText("La respuesta aparecerá aquí...")
@@ -331,6 +344,7 @@ class OverlayWindow(QWidget):
     def _connect_signals(self):
         self.bridge.status_changed.connect(self._on_status_changed)
         self.bridge.subtitle_ready.connect(self._on_subtitle_ready)
+        self.bridge.subtitle_translated.connect(self._on_subtitle_translated)
         self.bridge.subtitle_partial.connect(self._on_subtitle_partial)
         self.bridge.question_ready.connect(self._on_question_ready)
         self.bridge.assistant_state_changed.connect(self._on_assistant_state_changed)
@@ -342,8 +356,9 @@ class OverlayWindow(QWidget):
         assistant_on = get_assistant_enabled()
         is_english_meeting = get_language_mode() == "en"
 
-        # Tarjeta de subtítulo: depende SOLO del idioma de reunión (EN), sin importar el asistente
+        # Tarjetas de subtítulo: dependen SOLO del idioma de reunión (EN), sin importar el asistente
         self.subtitle_card.setVisible(is_english_meeting)
+        self.subtitle_es_card.setVisible(is_english_meeting)
 
         # Tarjetas de pregunta/respuesta: dependen SOLO del estado del asistente
         self.en_card.setVisible(assistant_on)
@@ -405,6 +420,9 @@ class OverlayWindow(QWidget):
             "on_subtitle": lambda source, en, segment_id: self.bridge.subtitle_ready.emit(
                 source, en, segment_id
             ),
+            "on_subtitle_translated": lambda source, es, segment_id: self.bridge.subtitle_translated.emit(
+                source, es, segment_id
+            ),
             "on_subtitle_partial": lambda source, en: self.bridge.subtitle_partial.emit(source, en),
             "on_question": lambda source, q: self.bridge.question_ready.emit(source, q),
             "on_assistant_state": lambda text: self.bridge.assistant_state_changed.emit(text),
@@ -461,6 +479,20 @@ class OverlayWindow(QWidget):
         self.subtitle_text.setText(f'<span style="color:{color}; font-weight:bold;">[{source}]</span> {en_text}')
         self.subtitle_time.setText(_now())
         self._append_history(f"[{source}] {en_text}")
+        self._schedule_resize()
+
+    def _on_subtitle_translated(self, source, es_text, segment_id):
+        if get_language_mode() != "en":
+            return
+
+        last_id = self._last_subtitle_segment_id.get(source, 0)
+        if segment_id < last_id:
+            return  # llegó tarde, ya hay un segmento más nuevo mostrado
+
+        color = SOURCE_COLORS.get(source, "#ffffff")
+        self.subtitle_es_text.setStyleSheet("color: #e8e8e8; font-size: 14px;")
+        self.subtitle_es_text.setText(f'<span style="color:{color}; font-weight:bold;">[{source}]</span> {es_text}')
+        self.subtitle_es_time.setText(_now())
         self._schedule_resize()
 
     def _on_question_ready(self, source, question):

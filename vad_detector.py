@@ -11,6 +11,7 @@ from RealtimeSTT import AudioToTextRecorder
 from assistant import is_question, answer_question, warmup
 from config import get_language_mode, get_assistant_enabled, native_model_lock, get_assistant_listen_mode
 from transcriber import transcribe_audio
+from translator import translate_text
 
 TARGET_SAMPLE_RATE = 16000
 MIC_BLOCK_SIZE = 512
@@ -207,6 +208,32 @@ def _run_vad_loop(audio_queue, samplerate, source_label, on_speech_segment, is_r
 
 
 class ListenerController:
+    """
+    Reglas de negocio:
+    - El subtítulo EN es independiente del estado del asistente: se muestra siempre
+      que la reunión esté en modo Inglés (get_language_mode() == "en"), sin importar
+      si el asistente está ON u OFF.
+    - Reunión en Español -> nunca se muestran subtítulos.
+    - El subtítulo ES se traduce de forma asíncrona con DeepSeek a partir del EN,
+      sin bloquear ni retrasar la aparición del subtítulo EN (evita el desface
+      que existía antes con DeepL). Si llega tarde (ya hay un segmento más nuevo
+      mostrado), la UI la descarta usando el segment_id.
+    - Las tarjetas de Pregunta/Respuesta dependen SOLO del estado del asistente
+      (get_assistant_enabled()), y responden SIEMPRE en el idioma configurado
+      (get_language_mode), sin importar quién preguntó ni el idioma de reunión.
+    - Quién puede disparar preguntas al asistente se controla con config.ASSISTANT_LISTEN_MODE
+      ("compañeros", "yo", "ambos")
+    - Cada segmento de audio lleva un segment_id incremental (global, compartido entre fuentes)
+      usado solo como identificador único; el control de "no mostrar resultados viejos" se hace
+      en la UI de forma independiente por fuente, para que "Tú" y "Compañeros" no se bloqueen entre sí
+    - El flujo de pregunta/respuesta: se muestra la pregunta detectada, luego "Pensando...",
+      luego la respuesta (o un mensaje de error), sin pasos intermedios de conexión
+    - Tu propia voz ("Tú") se procesa en streaming en tiempo real (RealtimeSTT), usando el idioma
+      de reconocimiento correspondiente al modo de reunión seleccionado (get_language_mode)
+    - La voz de "Compañeros" sigue el flujo VAD + Whisper por segmento (loopback)
+    - Cambiar el idioma de reunión (EN/ES) mientras la app está corriendo reinicia SOLO el
+      streamer del micrófono (restart_mic_language), sin afectar el loopback de "Compañeros"
+    """
 
     def __init__(self, callbacks: dict, mic_device=MIC_DEVICE_INDEX):
         self.callbacks = callbacks
@@ -257,8 +284,17 @@ class ListenerController:
             self._assistant_busy.clear()
 
     def _handle_subtitle(self, source, text, segment_id):
-        # Sin traducción: solo se emite el subtítulo en el idioma original (EN)
+        # 1. Emite el subtítulo EN de inmediato, sin esperar la traducción
         self._emit("on_subtitle", source, text, segment_id)
+
+        # 2. Traduce en un hilo separado y emite un evento independiente
+        #    cuando esté lista, sin bloquear ni retrasar el subtítulo EN
+        def _translate_async():
+            translated = translate_text(text, source="EN", target="ES")
+            if translated:
+                self._emit("on_subtitle_translated", source, translated, segment_id)
+
+        threading.Thread(target=_translate_async, daemon=True).start()
 
     # ---------- Flujo LOOPBACK (Compañeros): VAD + Whisper por segmento ----------
     def _on_segment(self, audio_np, source_label):

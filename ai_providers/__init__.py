@@ -2,6 +2,7 @@ from config import get_ai_provider_name
 from ai_providers.gemini_provider import GeminiProvider
 from ai_providers.github_models_provider import GitHubModelsProvider
 from ai_providers.ollama_provider import OllamaProvider
+from ai_providers.deepseek_provider import DeepSeekProvider
 
 
 def get_provider():
@@ -12,12 +13,14 @@ def get_provider():
         return GitHubModelsProvider()
     elif name == "ollama":
         return OllamaProvider()
+    elif name == "deepseek":
+        return DeepSeekProvider()
     return GeminiProvider()
 
 
 def get_fallback_provider():
-    """Proveedor local de respaldo cuando el principal (nube) falla por conexión."""
+    """Proveedor de respaldo en la nube distinto al principal"""
     try:
-        return OllamaProvider(model_name="qwen2.5-coder:1.5b")
+        return GitHubModelsProvider()
     except Exception:
         return None

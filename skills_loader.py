@@ -1,7 +1,7 @@
 import os
 import yaml
 
-SKILLS_FILE_PATH = os.path.join(os.path.dirname(__file__), "knowledge", "skills.yaml")
+SKILLS_FILE_PATH = os.path.join(os.path.dirname(__file__), "knowledge", "skill.yaml")
 
 _skills_cache = None
 _last_mtime = None
@@ -10,6 +10,7 @@ _last_mtime = None
 def _load_raw_skills():
     global _skills_cache, _last_mtime
     if not os.path.exists(SKILLS_FILE_PATH):
+        print(f"[SkillsLoader] Archivo no encontrado: {SKILLS_FILE_PATH}")
         return []
 
     mtime = os.path.getmtime(SKILLS_FILE_PATH)
