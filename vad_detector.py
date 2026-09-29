@@ -108,16 +108,31 @@ class RealtimeMicStreamer:
                 self.on_final_text("YOU", sentence.strip())
 
     def stop(self):
+        """Detiene RealtimeSTT evitando cerrar el pipe mientras text() lo usa."""
         self.running = False
 
-        if self.recorder:
+        recorder = self.recorder
+        if recorder:
+            # text() puede estar bloqueado esperando datos. abort() le indica
+            # a RealtimeSTT que interrumpa el flujo antes de cerrar recursos.
             try:
-                self.recorder.stop()
+                recorder.abort()
+            except Exception:
+                pass
+
+            try:
+                recorder.stop()
             except Exception:
                 pass
 
         if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=2.0)
+            self.thread.join(timeout=3.0)
+
+        # No llamamos shutdown() aquí. En la versión instalada de RealtimeSTT
+        # se observó que shutdown() intenta cerrar un FasterWhisperEngine que
+        # no expone close(), generando otro error durante el cierre.
+        self.thread = None
+        self.recorder = None
 
 
 class LoopbackVADStreamer:
