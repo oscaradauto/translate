@@ -567,6 +567,21 @@ class OverlayWindow(QWidget):
 
         self._scroll_to_bottom()
 
+    def _stop_controller_async(self, controller):
+        def cleanup():
+            try:
+                controller.stop()
+            except Exception as exc:
+                print(f"[Shutdown] Error liberando recursos: {exc}")
+            finally:
+                self.bridge.shutdown_finished.emit()
+
+        threading.Thread(
+            target=cleanup,
+            name="subtitle-shutdown",
+            daemon=False,
+        ).start()
+
     def _on_shutdown_finished(self):
         self.controller = None
         self._starting = False
