@@ -110,6 +110,7 @@ class OverlayWindow(QWidget):
         self._drag_pos = None
         self._entries = {}
         self._entry_order = []
+        self._partial_entries = {}
         self._max_entries = 60
 
         self._setup_window()
@@ -346,6 +347,7 @@ class OverlayWindow(QWidget):
 
         self._entries.clear()
         self._entry_order.clear()
+        self._partial_entries.clear()
 
         if self.empty_label is None:
             self.empty_label = QLabel(
