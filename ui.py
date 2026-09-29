@@ -480,15 +480,30 @@ class OverlayWindow(QWidget):
 
     def _on_subtitle_partial(self, source, text):
         # El parcial se muestra inmediatamente en el mismo bloque de esa voz.
-        entry = self._ensure_entry(source, 0)
+        entry = self._partial_entries.get(source)
+        if entry is None:
+            entry = self._ensure_entry(source, 0)
+            self._partial_entries[source] = entry
+
         entry["english"].setText(text)
         entry["spanish"].setText("")
 
-        # El segmento final sustituirá este bloque por su ID real.
         self._scroll_to_bottom()
 
     def _on_subtitle_ready(self, source, text, segment_id):
-        entry = self._ensure_entry(source, segment_id)
+        partial_key = (source, 0)
+        partial_entry = self._partial_entries.pop(source, None)
+
+        if partial_entry is not None:
+            self._entries.pop(partial_key, None)
+            entry = partial_entry
+            actual_key = self._entry_key(source, segment_id)
+            self._entries[actual_key] = entry
+            if partial_key in self._entry_order:
+                self._entry_order[self._entry_order.index(partial_key)] = actual_key
+        else:
+            entry = self._ensure_entry(source, segment_id)
+
         entry["english"].setText(text)
         entry["spanish"].setText("Traduciendo...")
         entry["spanish"].setStyleSheet(
