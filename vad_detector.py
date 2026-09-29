@@ -354,36 +354,55 @@ class ListenerController:
         started = 0
 
         try:
-            self.mic_streamer = RealtimeMicStreamer(
+            streamer = RealtimeMicStreamer(
                 self.mic_device,
                 self._on_partial,
                 self._on_final,
                 self._on_source_error,
             )
-            self.mic_streamer.start()
+            streamer.start()
+            self.mic_streamer = streamer
             started += 1
         except Exception as exc:
+            try:
+                streamer.stop()
+            except Exception:
+                pass
+            self.mic_streamer = None
             self._on_source_error("YOU", exc)
 
         try:
-            self.loopback_streamer = RealtimeSystemAudioStreamer(
+            streamer = RealtimeSystemAudioStreamer(
                 self._on_partial,
                 self._on_final,
                 self._on_source_error,
             )
-            self.loopback_streamer.start()
+            streamer.start()
+            self.loopback_streamer = streamer
             started += 1
         except Exception as exc:
+            try:
+                streamer.stop()
+            except Exception:
+                pass
+            self.loopback_streamer = None
             self._on_source_error("COMPANION", exc)
 
         if started:
             self._emit("on_status", "Escuchando...")
         else:
             self.running = False
+            self.stop()
             self._emit("on_status", "Error de audio")
 
     def _on_source_error(self, source: str, exc: Exception) -> None:
-        print(f"[{source}] {exc}")
+        # Session-level callbacks already report the root error. Avoid printing
+        # the same startup exception a second time from the controller.
+        message = str(exc)
+        if "credit_balance_exhausted" in message:
+            self._emit("on_status", "API sin créditos")
+        else:
+            self._emit("on_status", f"Error {source}")
 
         mic_alive = bool(
             self.mic_streamer
