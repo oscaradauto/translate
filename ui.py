@@ -678,3 +678,13 @@ class OverlayWindow(QWidget):
         self._starting = False
         event.accept()
 
+
+def main():
+    app = QApplication(sys.argv)
+    window = OverlayWindow()
+    window.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
