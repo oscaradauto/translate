@@ -4,11 +4,11 @@ MICROPHONE  -> YOU
 SYSTEM AUDIO -> COMPANION
 
 No contiene lógica de agente ni detección de preguntas. La primera etapa de V2
-está dedicada exclusivamente a subtítulos.
+está dedicada exclusivamente a subtítulos y traducción incremental.
 """
 
-import queue
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -29,6 +29,11 @@ LOOPBACK_BLOCK_FRAMES = 1536
 REALTIME_MODEL = "small"
 REALTIME_POST_SPEECH_SILENCE = 0.4
 REALTIME_PROCESSING_PAUSE = 0.2
+
+# Traducción incremental: actualizamos el español aproximadamente cada segundo
+# mientras el inglés continúa creciendo, sin enviar una petición por cada token.
+INCREMENTAL_TRANSLATION_INTERVAL = 0.9
+MIN_TRANSLATION_CHANGE_CHARS = 4
 
 
 def _resample_linear(block, orig_sr, target_sr):
@@ -257,7 +262,7 @@ class RealtimeSystemAudioStreamer:
 
 
 class ListenerController:
-    """Orquesta exclusivamente subtítulos y traducción."""
+    """Orquesta subtítulos, traducción incremental y traducción final."""
 
     def __init__(self, callbacks, mic_device=MIC_DEVICE_INDEX):
         self.callbacks = callbacks
@@ -274,6 +279,22 @@ class ListenerController:
             thread_name_prefix="subtitle-translation",
         )
 
+        # Estado independiente por fuente. La generación evita que una
+        # traducción antigua pueda sobrescribir una más reciente.
+        self._translation_lock = threading.Lock()
+        self._translation_state = {
+            "YOU": {
+                "last_submitted_text": "",
+                "last_submit_time": 0.0,
+                "generation": 0,
+            },
+            "COMPANION": {
+                "last_submitted_text": "",
+                "last_submit_time": 0.0,
+                "generation": 0,
+            },
+        }
+
     def _next_segment_id(self):
         with self._counter_lock:
             self._segment_counter += 1
@@ -284,10 +305,17 @@ class ListenerController:
         if callback:
             callback(*args)
 
-    def _handle_subtitle(self, source, text):
-        segment_id = self._next_segment_id()
+    def _submit_translation(self, source, text, segment_id, is_final=False):
+        text = text.strip()
+        if not text:
+            return
 
-        self._emit("on_subtitle", source, text, segment_id)
+        with self._translation_lock:
+            state = self._translation_state[source]
+            state["generation"] += 1
+            generation = state["generation"]
+            state["last_submitted_text"] = text
+            state["last_submit_time"] = time.monotonic()
 
         future = self._translation_pool.submit(
             translate_text,
@@ -303,31 +331,84 @@ class ListenerController:
                 print(f"[Translation] Error: {exc}")
                 return
 
-            if translated:
-                self._emit(
-                    "on_subtitle_translated",
-                    source,
-                    translated,
-                    segment_id,
-                )
+            if not translated or not self.running:
+                return
+
+            # Si llegó una traducción más nueva, ignoramos esta respuesta.
+            with self._translation_lock:
+                current_generation = self._translation_state[source]["generation"]
+
+            if generation != current_generation:
+                return
+
+            self._emit(
+                "on_subtitle_translated",
+                source,
+                translated,
+                segment_id,
+                not is_final,
+            )
 
         future.add_done_callback(_translation_done)
 
     def _on_partial(self, source_label, text):
-        if self.running and text:
-            self._emit("on_subtitle_partial", source_label, text)
+        if not self.running or not text:
+            return
+
+        self._emit("on_subtitle_partial", source_label, text)
+
+        # No traducimos cada actualización de RealtimeSTT. Esperamos ~0.9 s
+        # o un cambio suficientemente grande para mantener baja la latencia.
+        now = time.monotonic()
+        text = text.strip()
+
+        with self._translation_lock:
+            state = self._translation_state[source_label]
+            elapsed = now - state["last_submit_time"]
+            changed = abs(
+                len(text) - len(state["last_submitted_text"])
+            ) >= MIN_TRANSLATION_CHANGE_CHARS
+
+        if (
+            elapsed >= INCREMENTAL_TRANSLATION_INTERVAL
+            and changed
+            and len(text) >= 4
+        ):
+            self._submit_translation(
+                source_label,
+                text,
+                segment_id=0,
+                is_final=False,
+            )
 
     def _on_final(self, source_label, text):
         if not self.running or len(text.strip()) < 2:
             return
 
-        self._handle_subtitle(source_label, text)
+        segment_id = self._next_segment_id()
+        self._emit("on_subtitle", source_label, text.strip(), segment_id)
+
+        # La traducción final siempre se envía, aunque haya habido traducciones
+        # incrementales anteriores.
+        self._submit_translation(
+            source_label,
+            text,
+            segment_id=segment_id,
+            is_final=True,
+        )
 
     def start(self):
         if self.running:
             return
 
         self.running = True
+
+        with self._translation_lock:
+            for state in self._translation_state.values():
+                state["last_submitted_text"] = ""
+                state["last_submit_time"] = 0.0
+                state["generation"] = 0
+
         self._emit("on_status", "Preparando audio...")
 
         try:
