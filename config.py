@@ -18,6 +18,12 @@ WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "small")
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
 
+# Modelo usado por RealtimeSTT para los subtítulos parciales del micrófono.
+# En CPU, int8 evita que CTranslate2 intente cargar los pesos float16 y luego
+# convertirlos automáticamente a float32.
+REALTIME_COMPUTE_TYPE = os.getenv("REALTIME_COMPUTE_TYPE", "int8")
+REALTIME_DEVICE = os.getenv("REALTIME_DEVICE", "cpu")
+
 # El subtítulo en inglés debe aparecer sin esperar la traducción.
 TRANSLATION_TIMEOUT = float(os.getenv("TRANSLATION_TIMEOUT", "4.0"))
 
