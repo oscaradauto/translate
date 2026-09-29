@@ -50,8 +50,8 @@ SUBTITLE_MAX_UTTERANCE_SECONDS = float(
 # Whisper hallucinate short words even when the user did not speak.
 MIC_VAD_MODE = int(os.getenv("MIC_VAD_MODE", "3"))
 MIC_MIN_DBFS = float(os.getenv("MIC_MIN_DBFS", "-40"))
-MIC_SPEECH_START_MS = int(os.getenv("MIC_SPEECH_START_MS", "240"))
-MIC_MIN_VOICED_MS = int(os.getenv("MIC_MIN_VOICED_MS", "420"))
+MIC_SPEECH_START_MS = int(os.getenv("MIC_SPEECH_START_MS", "120"))
+MIC_MIN_VOICED_MS = int(os.getenv("MIC_MIN_VOICED_MS", "180"))
 
 MEETING_VAD_MODE = int(os.getenv("MEETING_VAD_MODE", "2"))
 MEETING_SPEECH_START_MS = int(
