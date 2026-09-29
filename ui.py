@@ -24,27 +24,15 @@ from PyQt6.QtWidgets import (
 
 
 PILL_STYLE = """
-QPushButton, QComboBox {
+QPushButton {
     background-color: rgba(255,255,255,15);
     color: white;
     border-radius: 16px;
     padding: 6px 14px;
     border: 1px solid rgba(255,255,255,25);
 }
-QComboBox::drop-down {
-    border: none;
-    width: 18px;
-}
-QPushButton:hover, QComboBox:hover {
+QPushButton:hover {
     background-color: rgba(255,255,255,25);
-}
-QComboBox QAbstractItemView {
-    background-color: #1e1e1e;
-    color: white;
-    selection-background-color: #3a3a5a;
-    selection-color: white;
-    border: 1px solid rgba(255,255,255,30);
-    outline: none;
 }
 """
 
