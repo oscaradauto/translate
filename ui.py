@@ -294,24 +294,9 @@ class OverlayWindow(QWidget):
 
     def _on_language_changed(self, index):
         set_meeting_language("en")
-        if self.controller:
-            self._restart_listener()
-
-    def _restart_listener(self):
-        if not self.controller:
-            return
-
-        old_controller = self.controller
-        old_controller.stop()
-        self.controller = None
-        QTimer.singleShot(100, self._on_start_clicked)
 
     def _on_start_clicked(self):
-        if self._starting or self._closing:
-            return
-
-        if self.controller:
-            self._on_stop_clicked()
+        if self._starting or self._closing or self.controller:
             return
 
         self._starting = True
@@ -347,43 +332,6 @@ class OverlayWindow(QWidget):
             name="subtitle-controller",
             daemon=True,
         ).start()
-
-    def _stop_controller_async(self, controller, close_after=False):
-        def _stop_controller():
-            try:
-                controller.stop()
-            except Exception as exc:
-                print(f"[UI] Error deteniendo audio: {exc}")
-            finally:
-                if close_after:
-                    self.bridge.shutdown_finished.emit()
-                else:
-                    self.bridge.status_changed.emit("Detenido")
-
-        threading.Thread(
-            target=_stop_controller,
-            name="subtitle-controller-stop",
-            daemon=True,
-        ).start()
-
-    def _on_stop_clicked(self):
-        if not self.controller:
-            self._starting = False
-            self.start_btn.setText("▶ Iniciar")
-            self.start_btn.setEnabled(True)
-            self._on_status_changed("Detenido")
-            return
-
-        self._starting = False
-        self.start_btn.setEnabled(False)
-        self.start_btn.setText("⏳ Deteniendo...")
-        self._on_status_changed("Deteniendo...")
-
-        controller = self.controller
-        self.controller = None
-
-        self._stop_controller_async(controller)
-        self._clear_transcript()
 
     def _clear_transcript(self):
         for entry in self._entries.values():
@@ -502,19 +450,15 @@ class OverlayWindow(QWidget):
     def _on_status_changed(self, text):
         listening = text.startswith("Escuchando")
         loading = text in ("Cargando...", "Preparando audio...")
-        stopping = text == "Deteniendo..."
         error = text == "Error de audio"
         active = text not in ("Inactivo", "Detenido", "")
 
         if listening:
             self._starting = False
-            self.start_btn.setText("■ Detener")
-            self.start_btn.setEnabled(True)
+            self.start_btn.setText("● En curso")
+            self.start_btn.setEnabled(False)
         elif loading:
             self.start_btn.setText("⏳ Cargando...")
-            self.start_btn.setEnabled(False)
-        elif stopping:
-            self.start_btn.setText("⏳ Deteniendo...")
             self.start_btn.setEnabled(False)
         elif error:
             self._starting = False
@@ -624,13 +568,10 @@ class OverlayWindow(QWidget):
         self._scroll_to_bottom()
 
     def _on_shutdown_finished(self):
-        self._on_status_changed("Detenido")
         self.controller = None
         self._starting = False
         self._closing = False
-        self.close_btn.setEnabled(True)
-        self.start_btn.setEnabled(True)
-        QTimer.singleShot(0, self.close)
+        QApplication.quit()
 
     def _show_history(self):
         dialog = QDialog(self)
@@ -722,24 +663,18 @@ class OverlayWindow(QWidget):
             self.close_btn.setEnabled(False)
             self.history_btn.setEnabled(False)
             self.lang_combo.setEnabled(False)
-            self._on_status_changed("Deteniendo...")
 
             controller = self.controller
             self.controller = None
-            self._stop_controller_async(controller, close_after=True)
+
+            # La ventana desaparece inmediatamente. El audio, RealtimeSTT,
+            # captura loopback y traducción terminan de liberar recursos en
+            # segundo plano; QApplication termina cuando el cleanup finaliza.
+            self.hide()
+            self._stop_controller_async(controller)
             event.ignore()
             return
 
         self._starting = False
         event.accept()
 
-
-def main():
-    app = QApplication(sys.argv)
-    window = OverlayWindow()
-    window.show()
-    sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()
