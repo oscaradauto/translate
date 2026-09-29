@@ -426,6 +426,8 @@ class OverlayWindow(QWidget):
         color = (
             "#5cb85c"
             if listening
+            else "#d9534f"
+            if error
             else "#f0ad4e"
             if active
             else "#888888"
