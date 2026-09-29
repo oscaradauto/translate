@@ -31,7 +31,9 @@ from config import (
     MIC_VAD_MODE,
     SUBTITLE_MAX_UTTERANCE_SECONDS,
     SUBTITLE_PARTIAL_INTERVAL_SECONDS,
+    SUBTITLE_PARTIAL_MIN_SECONDS,
     SUBTITLE_SPEECH_END_MS,
+    WHISPER_PARTIAL_WINDOW_SECONDS,
 )
 from local_transcriber import LocalWhisperTranscriber
 
@@ -190,7 +192,8 @@ class _SpeechSegmenter:
         )
 
         if (
-            self._voiced_frames >= self._min_voiced_frames
+            duration_seconds >= SUBTITLE_PARTIAL_MIN_SECONDS
+            and self._voiced_frames >= self._min_voiced_frames
             and now - self._last_partial_time
             >= SUBTITLE_PARTIAL_INTERVAL_SECONDS
         ):
@@ -223,10 +226,22 @@ class _SpeechSegmenter:
         if self._segment_id is None or not self._frames:
             return
 
+        window_frames = max(
+            1,
+            int(
+                np.ceil(
+                    WHISPER_PARTIAL_WINDOW_SECONDS
+                    * 1000
+                    / VAD_FRAME_MS
+                )
+            ),
+        )
+        rolling_frames = self._frames[-window_frames:]
+
         self.transcriber.submit_partial(
             self.source,
             self._segment_id,
-            b"".join(self._frames),
+            b"".join(rolling_frames),
         )
 
     def _finalize(self) -> None:
