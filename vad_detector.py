@@ -13,7 +13,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import soundcard as sc
-import torch
 from RealtimeSTT import AudioToTextRecorder
 
 from config import (
@@ -23,37 +22,13 @@ from config import (
     TRANSLATION_TIMEOUT,
     get_meeting_language,
 )
-from transcriber import transcribe_audio
 from translator import translate_text
 
 TARGET_SAMPLE_RATE = 16000
 LOOPBACK_BLOCK_FRAMES = 1536
-SILENCE_TIMEOUT = 0.5
-MIN_SPEECH_DURATION = 0.3
-VAD_THRESHOLD = 0.5
 REALTIME_MODEL = "small"
 REALTIME_POST_SPEECH_SILENCE = 0.4
-
-_vad_model = None
-_vad_lock = threading.Lock()
-
-
-def _get_vad_model():
-    global _vad_model
-
-    if _vad_model is None:
-        with _vad_lock:
-            if _vad_model is None:
-                print("Cargando modelo VAD (silero-vad)...")
-                _vad_model, _ = torch.hub.load(
-                    repo_or_dir="snakers4/silero-vad",
-                    model="silero_vad",
-                    force_reload=False,
-                    trust_repo=True,
-                )
-                print("Modelo VAD cargado.")
-
-    return _vad_model
+REALTIME_PROCESSING_PAUSE = 0.2
 
 
 def _resample_linear(block, orig_sr, target_sr):
@@ -65,6 +40,11 @@ def _resample_linear(block, orig_sr, target_sr):
     x_old = np.linspace(0, duration, num=len(block), endpoint=False)
     x_new = np.linspace(0, duration, num=target_len, endpoint=False)
     return np.interp(x_new, x_old, block).astype(np.float32)
+
+
+def _to_pcm16(audio_np):
+    clipped = np.clip(audio_np, -1.0, 1.0)
+    return (clipped * 32767.0).astype(np.int16).tobytes()
 
 
 class RealtimeMicStreamer:
@@ -91,6 +71,7 @@ class RealtimeMicStreamer:
             compute_type=REALTIME_COMPUTE_TYPE,
             device=REALTIME_DEVICE,
             enable_realtime_transcription=True,
+            realtime_processing_pause=REALTIME_PROCESSING_PAUSE,
             on_realtime_transcription_update=self._on_partial,
             use_microphone=True,
             input_device_index=self.device_index,
@@ -117,15 +98,11 @@ class RealtimeMicStreamer:
 
         recorder = self.recorder
         if recorder:
-            # abort() interrumpe cualquier text() que esté esperando audio.
             try:
                 recorder.abort()
             except Exception:
                 pass
 
-            # RealtimeSTT 1.1.2 intenta llamar .close() sobre el modelo de
-            # realtime durante shutdown(). FasterWhisperEngine no expone
-            # close(), por lo que retiramos esa referencia antes del shutdown.
             try:
                 recorder.realtime_transcription_model = None
             except Exception:
@@ -136,8 +113,6 @@ class RealtimeMicStreamer:
             except Exception as exc:
                 print(f"[YOU] RealtimeSTT shutdown error: {exc}")
 
-        # shutdown() se encarga de los workers internos; después esperamos
-        # a nuestro thread para garantizar que no use recorder tras limpiarlo.
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=3.0)
 
@@ -145,44 +120,58 @@ class RealtimeMicStreamer:
         self.recorder = None
 
 
-class LoopbackVADStreamer:
-    """Audio del sistema/Teams/Zoom/Meet: se etiqueta como COMPANION."""
+class RealtimeSystemAudioStreamer:
+    """Audio del sistema/Teams/Zoom/Meet con subtítulos parciales en tiempo real."""
 
-    def __init__(self, on_speech_segment, on_error=None):
-        self.on_speech_segment = on_speech_segment
+    def __init__(self, on_partial_text, on_final_text, on_error=None):
+        self.on_partial_text = on_partial_text
+        self.on_final_text = on_final_text
         self.on_error = on_error
-        self.audio_queue = queue.Queue(maxsize=100)
         self.running = False
         self.capture_thread = None
-        self.processing_thread = None
+        self.transcription_thread = None
+        self.recorder = None
         self.samplerate = 48000
+
+    def _on_partial(self, text):
+        if text:
+            self.on_partial_text("COMPANION", text)
 
     def start(self):
         self.running = True
 
-        self.capture_thread = threading.Thread(
-            target=self._capture_loop,
-            name="system-audio-capture",
-            daemon=True,
-        )
-        self.processing_thread = threading.Thread(
-            target=self._process_loop,
-            name="system-audio-vad",
-            daemon=True,
-        )
+        try:
+            self.recorder = AudioToTextRecorder(
+                model=REALTIME_MODEL,
+                language=get_meeting_language(),
+                spinner=False,
+                compute_type=REALTIME_COMPUTE_TYPE,
+                device=REALTIME_DEVICE,
+                enable_realtime_transcription=True,
+                realtime_processing_pause=REALTIME_PROCESSING_PAUSE,
+                on_realtime_transcription_update=self._on_partial,
+                use_microphone=False,
+                post_speech_silence_duration=REALTIME_POST_SPEECH_SILENCE,
+            )
 
-        self.capture_thread.start()
-        self.processing_thread.start()
+            self.capture_thread = threading.Thread(
+                target=self._capture_loop,
+                name="system-audio-capture",
+                daemon=True,
+            )
+            self.transcription_thread = threading.Thread(
+                target=self._transcription_loop,
+                name="system-audio-transcription",
+                daemon=True,
+            )
 
-    def stop(self):
-        self.running = False
-
-        for thread in (self.capture_thread, self.processing_thread):
-            if thread and thread.is_alive():
-                thread.join(timeout=2.0)
-
-        self.capture_thread = None
-        self.processing_thread = None
+            self.capture_thread.start()
+            self.transcription_thread.start()
+        except Exception as exc:
+            self.running = False
+            self._safe_shutdown_recorder()
+            if self.on_error:
+                self.on_error(exc)
 
     def _capture_loop(self):
         try:
@@ -197,90 +186,74 @@ class LoopbackVADStreamer:
                     data = recorder.record(numframes=LOOPBACK_BLOCK_FRAMES)
                     mono = data.mean(axis=1) if data.ndim > 1 else data
 
-                    try:
-                        self.audio_queue.put_nowait(mono.astype(np.float32, copy=True))
-                    except queue.Full:
-                        # Si el procesamiento se atrasa, descartamos el bloque
-                        # más reciente para no acumular latencia infinita.
-                        pass
-
+                    audio_16k = _resample_linear(
+                        mono,
+                        self.samplerate,
+                        TARGET_SAMPLE_RATE,
+                    )
+                    if len(audio_16k):
+                        self.recorder.feed_audio(
+                            _to_pcm16(audio_16k),
+                            original_sample_rate=TARGET_SAMPLE_RATE,
+                        )
         except Exception as exc:
-            self.running = False
-            if self.on_error:
-                self.on_error(exc)
+            if self.running:
+                self.running = False
+                if self.on_error:
+                    self.on_error(exc)
 
-    def _process_loop(self):
-        _run_vad_loop(
-            self.audio_queue,
-            self.samplerate,
-            self.on_speech_segment,
-            lambda: self.running,
-        )
-
-
-def _run_vad_loop(audio_queue, samplerate, on_speech_segment, is_running):
-    speech_buffer = []
-    silence_duration = 0.0
-    is_speaking = False
-    resample_carry = np.array([], dtype=np.float32)
-    required_samples = 512
-
-    while is_running():
-        try:
-            block = audio_queue.get(timeout=0.5)
-        except queue.Empty:
-            continue
-
-        block_16k = _resample_linear(
-            block,
-            samplerate,
-            TARGET_SAMPLE_RATE,
-        )
-
-        if len(block_16k) == 0:
-            continue
-
-        resample_carry = np.concatenate([resample_carry, block_16k])
-
-        while len(resample_carry) >= required_samples:
-            chunk = resample_carry[:required_samples]
-            resample_carry = resample_carry[required_samples:]
-
+    def _transcription_loop(self):
+        while self.running:
             try:
-                speech_prob = _get_vad_model()(
-                    torch.from_numpy(chunk),
-                    TARGET_SAMPLE_RATE,
-                ).item()
+                sentence = self.recorder.text()
             except Exception as exc:
-                print(f"[COMPANION] VAD error: {exc}")
+                if self.running:
+                    print(f"[COMPANION] RealtimeSTT error: {exc}")
                 continue
 
-            block_duration = required_samples / TARGET_SAMPLE_RATE
+            if sentence and sentence.strip():
+                self.on_final_text("COMPANION", sentence.strip())
 
-            if speech_prob >= VAD_THRESHOLD:
-                is_speaking = True
-                silence_duration = 0.0
-                speech_buffer.append(chunk)
-                continue
+    def _safe_shutdown_recorder(self):
+        recorder = self.recorder
+        if not recorder:
+            return
 
-            if not is_speaking:
-                continue
+        try:
+            recorder.abort()
+        except Exception:
+            pass
 
-            silence_duration += block_duration
-            speech_buffer.append(chunk)
+        try:
+            recorder.realtime_transcription_model = None
+        except Exception:
+            pass
 
-            if silence_duration < SILENCE_TIMEOUT:
-                continue
+        try:
+            recorder.shutdown()
+        except Exception as exc:
+            print(f"[COMPANION] RealtimeSTT shutdown error: {exc}")
 
-            full_audio = np.concatenate(speech_buffer)
-            duration = len(full_audio) / TARGET_SAMPLE_RATE
+        self.recorder = None
 
-            if duration >= MIN_SPEECH_DURATION:
-                on_speech_segment(full_audio, "COMPANION")
+    def stop(self):
+        self.running = False
 
-            speech_buffer = []
-            is_speaking = False
-            silence_duration = 0.0
+        recorder = self.recorder
+        if recorder:
+            try:
+                recorder.abort()
+            except Exception:
+                pass
+
+        for thread in (self.capture_thread, self.transcription_thread):
+            if thread and thread.is_alive():
+                thread.join(timeout=3.0)
+
+        self._safe_shutdown_recorder()
+
+        self.capture_thread = None
+        self.transcription_thread = None
 
 
 class ListenerController:
@@ -296,8 +269,6 @@ class ListenerController:
         self._segment_counter = 0
         self._counter_lock = threading.Lock()
 
-        # Máximo dos traducciones simultáneas: evita crear un hilo ilimitado
-        # por cada frase de la reunión.
         self._translation_pool = ThreadPoolExecutor(
             max_workers=2,
             thread_name_prefix="subtitle-translation",
@@ -316,10 +287,8 @@ class ListenerController:
     def _handle_subtitle(self, source, text):
         segment_id = self._next_segment_id()
 
-        # EN aparece inmediatamente.
         self._emit("on_subtitle", source, text, segment_id)
 
-        # ES se procesa aparte para no bloquear la aparición del EN.
         future = self._translation_pool.submit(
             translate_text,
             text,
@@ -344,25 +313,11 @@ class ListenerController:
 
         future.add_done_callback(_translation_done)
 
-    def _on_companion_segment(self, audio_np, source_label):
-        if not self.running:
-            return
-
-        text = transcribe_audio(
-            audio_np,
-            language=get_meeting_language(),
-        )
-
-        if len(text.strip()) < 2:
-            return
-
-        self._handle_subtitle(source_label, text)
-
-    def _on_mic_partial(self, source_label, text):
+    def _on_partial(self, source_label, text):
         if self.running and text:
             self._emit("on_subtitle_partial", source_label, text)
 
-    def _on_mic_final(self, source_label, text):
+    def _on_final(self, source_label, text):
         if not self.running or len(text.strip()) < 2:
             return
 
@@ -378,13 +333,14 @@ class ListenerController:
         try:
             self.mic_streamer = RealtimeMicStreamer(
                 self.mic_device,
-                self._on_mic_partial,
-                self._on_mic_final,
+                self._on_partial,
+                self._on_final,
             )
             self.mic_streamer.start()
 
-            self.loopback_streamer = LoopbackVADStreamer(
-                self._on_companion_segment,
+            self.loopback_streamer = RealtimeSystemAudioStreamer(
+                self._on_partial,
+                self._on_final,
                 on_error=self._on_loopback_error,
             )
             self.loopback_streamer.start()
