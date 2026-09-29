@@ -108,29 +108,35 @@ class RealtimeMicStreamer:
                 self.on_final_text("YOU", sentence.strip())
 
     def stop(self):
-        """Detiene RealtimeSTT evitando cerrar el pipe mientras text() lo usa."""
+        """Detiene RealtimeSTT y libera sus recursos de forma segura."""
         self.running = False
 
         recorder = self.recorder
         if recorder:
-            # text() puede estar bloqueado esperando datos. abort() le indica
-            # a RealtimeSTT que interrumpa el flujo antes de cerrar recursos.
+            # abort() interrumpe cualquier text() que esté esperando audio.
             try:
                 recorder.abort()
             except Exception:
                 pass
 
+            # RealtimeSTT 1.1.2 intenta llamar .close() sobre el modelo de
+            # realtime durante shutdown(). FasterWhisperEngine no expone
+            # close(), por lo que retiramos esa referencia antes del shutdown.
             try:
-                recorder.stop()
+                recorder.realtime_transcription_model = None
             except Exception:
                 pass
 
+            try:
+                recorder.shutdown()
+            except Exception as exc:
+                print(f"[YOU] RealtimeSTT shutdown error: {exc}")
+
+        # shutdown() se encarga de los workers internos; después esperamos
+        # a nuestro thread para garantizar que no use recorder tras limpiarlo.
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=3.0)
 
-        # No llamamos shutdown() aquí. En la versión instalada de RealtimeSTT
-        # se observó que shutdown() intenta cerrar un FasterWhisperEngine que
-        # no expone close(), generando otro error durante el cierre.
         self.thread = None
         self.recorder = None
 
