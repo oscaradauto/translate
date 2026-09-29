@@ -11,7 +11,6 @@ import time
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
     QApplication,
-    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -22,8 +21,6 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-from config import set_meeting_language
 
 
 PILL_STYLE = """
@@ -100,7 +97,6 @@ class Bridge(QObject):
     status_changed = pyqtSignal(str)
     subtitle_partial = pyqtSignal(str, str)
     subtitle_ready = pyqtSignal(str, str, int)
-    subtitle_translated = pyqtSignal(str, str, int, bool)
     shutdown_finished = pyqtSignal()
 
 
@@ -197,11 +193,12 @@ class OverlayWindow(QWidget):
         controls = QHBoxLayout()
         controls.setSpacing(8)
 
-        self.lang_combo = QComboBox()
-        self.lang_combo.addItems(["🌐 English → Español"])
-        self.lang_combo.setCurrentIndex(0)
-        self.lang_combo.setStyleSheet(PILL_STYLE)
-        self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
+        self.language_label = QLabel("🌐 English")
+        self.language_label.setStyleSheet(
+            "color: white; background-color: rgba(255,255,255,15); "
+            "border-radius: 16px; padding: 6px 14px; "
+            "border: 1px solid rgba(255,255,255,25);"
+        )
 
         self.history_btn = QPushButton("🕘 Historial")
         self.history_btn.setStyleSheet(PILL_STYLE)
@@ -216,7 +213,7 @@ class OverlayWindow(QWidget):
         self.close_btn.setStyleSheet(CLOSE_BTN_STYLE)
         self.close_btn.clicked.connect(self.close)
 
-        controls.addWidget(self.lang_combo)
+        controls.addWidget(self.language_label)
         controls.addWidget(self.history_btn)
         controls.addStretch()
         controls.addWidget(self.start_btn)
@@ -289,11 +286,7 @@ class OverlayWindow(QWidget):
         self.bridge.status_changed.connect(self._on_status_changed)
         self.bridge.subtitle_partial.connect(self._on_subtitle_partial)
         self.bridge.subtitle_ready.connect(self._on_subtitle_ready)
-        self.bridge.subtitle_translated.connect(self._on_subtitle_translated)
         self.bridge.shutdown_finished.connect(self._on_shutdown_finished)
-
-    def _on_language_changed(self, index):
-        set_meeting_language("en")
 
     def _on_start_clicked(self):
         if self._starting or self._closing or self.controller:
@@ -313,13 +306,6 @@ class OverlayWindow(QWidget):
             ),
             "on_subtitle": lambda source, text, segment_id: (
                 self.bridge.subtitle_ready.emit(source, text, segment_id)
-            ),
-            "on_subtitle_translated": (
-                lambda source, text, segment_id, incremental: (
-                    self.bridge.subtitle_translated.emit(
-                        source, text, segment_id, incremental
-                    )
-                )
             ),
         }
 
@@ -403,22 +389,7 @@ class OverlayWindow(QWidget):
             "color: #f0f2f5; font-size: 14px; background: transparent;"
         )
 
-        spanish_badge = QLabel(f"{SOURCE_LABELS.get(source, source)}-ES")
-        spanish_badge.setStyleSheet(
-            "color: #9aa9b8; font-size: 10px; font-weight: bold; "
-            "background: transparent;"
-        )
-
-        spanish = QLabel("Traduciendo...")
-        spanish.setWordWrap(True)
-        spanish.setStyleSheet(
-            "color: #718092; font-size: 13px; font-style: italic; "
-            "background: transparent;"
-        )
-
         card_layout.addWidget(english)
-        card_layout.addWidget(spanish_badge)
-        card_layout.addWidget(spanish)
 
         insert_at = max(0, self.transcript_layout.count() - 1)
         self.transcript_layout.insertWidget(insert_at, card)
@@ -426,7 +397,6 @@ class OverlayWindow(QWidget):
         entry = {
             "card": card,
             "english": english,
-            "spanish": spanish,
         }
         self._entries[key] = entry
         self._entry_order.append(key)
@@ -501,9 +471,6 @@ class OverlayWindow(QWidget):
 
         entry["english"].setText(text)
 
-        if not entry["spanish"].text():
-            entry["spanish"].setText("Traduciendo...")
-
         self._scroll_to_bottom()
 
     def _on_subtitle_ready(self, source, text, segment_id):
@@ -522,48 +489,15 @@ class OverlayWindow(QWidget):
 
         entry["english"].setText(text)
 
-        if not entry["spanish"].text() or entry["spanish"].text() == "Traduciendo...":
-            entry["spanish"].setText("Traduciendo...")
-            entry["spanish"].setStyleSheet(
-                "color: #718092; font-size: 13px; font-style: italic; "
-                "background: transparent;"
-            )
-
         history_key = self._entry_key(source, segment_id)
         history_item = {
             "key": history_key,
             "source": source,
             "time": _now(),
             "english": text,
-            "spanish": (
-                ""
-                if entry["spanish"].text() == "Traduciendo..."
-                else entry["spanish"].text()
-            ),
         }
         self._history_index[history_key] = len(self._history)
         self._history.append(history_item)
-
-        self._scroll_to_bottom()
-
-    def _on_subtitle_translated(self, source, text, segment_id, incremental):
-        if incremental and segment_id == 0:
-            entry = self._partial_entries.get(source)
-            if entry is None:
-                return
-        else:
-            entry = self._ensure_entry(source, segment_id)
-
-        entry["spanish"].setStyleSheet(
-            "color: #d3dbe4; font-size: 13px; background: transparent;"
-        )
-        entry["spanish"].setText(text)
-
-        if not incremental:
-            history_key = self._entry_key(source, segment_id)
-            history_position = self._history_index.get(history_key)
-            if history_position is not None:
-                self._history[history_position]["spanish"] = text
 
         self._scroll_to_bottom()
 
@@ -626,11 +560,9 @@ class OverlayWindow(QWidget):
             for item in self._history:
                 source = SOURCE_LABELS.get(item["source"], item["source"])
                 english = item["english"]
-                spanish = item["spanish"] or "Traduciendo..."
                 blocks.append(
                     f"[{item['time']}] {source}\n"
-                    f"EN: {english}\n"
-                    f"ES: {spanish}"
+                    f"EN: {english}"
                 )
 
             history_view.setPlainText("\n\n".join(blocks))
@@ -683,7 +615,7 @@ class OverlayWindow(QWidget):
             self.controller = None
 
             # La ventana desaparece inmediatamente. El audio, RealtimeSTT,
-            # captura loopback y traducción terminan de liberar recursos en
+            # captura loopback y recursos de audio terminan de liberar recursos en
             # segundo plano; QApplication termina cuando el cleanup finaliza.
             self.hide()
             self._stop_controller_async(controller)
