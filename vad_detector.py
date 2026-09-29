@@ -287,35 +287,43 @@ class ListenerController:
                 "last_submitted_text": "",
                 "last_submit_time": 0.0,
                 "generation": 0,
+                "in_flight": False,
+                "pending": None,
             },
             "COMPANION": {
                 "last_submitted_text": "",
                 "last_submit_time": 0.0,
                 "generation": 0,
+                "in_flight": False,
+                "pending": None,
             },
         }
 
     def _next_segment_id(self):
         with self._counter_lock:
             self._segment_counter += 1
-            return self._segment_counter
-
-    def _emit(self, name, *args):
-        callback = self.callbacks.get(name)
-        if callback:
-            callback(*args)
-
-    def _submit_translation(self, source, text, segment_id, is_final=False):
+            return self._segment    def _submit_translation(self, source, text, segment_id, is_final=False):
         text = text.strip()
         if not text:
             return
 
         with self._translation_lock:
             state = self._translation_state[source]
+
+            # Solo mantenemos una traducción en ejecución por fuente.
+            # Si Gemma todavía está procesando, guardamos únicamente el texto
+            # más reciente para evitar una cola de traducciones obsoletas.
+            if state["in_flight"]:
+                state["pending"] = (text, segment_id, is_final)
+                state["generation"] += 1
+                return
+
             state["generation"] += 1
             generation = state["generation"]
             state["last_submitted_text"] = text
             state["last_submit_time"] = time.monotonic()
+            state["in_flight"] = True
+            state["pending"] = None
 
         future = self._translation_pool.submit(
             translate_text,
@@ -326,28 +334,40 @@ class ListenerController:
 
         def _translation_done(done):
             try:
-                translated = done.result(timeout=TRANSLATION_TIMEOUT)
+                translated = done.result()
             except Exception as exc:
                 print(f"[Translation] Error: {exc}")
-                return
+                translated = ""
 
-            if not translated or not self.running:
-                return
+            next_request = None
 
-            # Si llegó una traducción más nueva, ignoramos esta respuesta.
             with self._translation_lock:
-                current_generation = self._translation_state[source]["generation"]
+                state = self._translation_state[source]
+                state["in_flight"] = False
+                current_generation = state["generation"]
 
-            if generation != current_generation:
-                return
+                # Si durante esta petición llegó texto más nuevo, lo enviamos
+                # inmediatamente después, sin acumular una cola.
+                if self.running and state["pending"] is not None:
+                    next_request = state["pending"]
+                    state["pending"] = None
 
-            self._emit(
-                "on_subtitle_translated",
-                source,
-                translated,
-                segment_id,
-                not is_final,
-            )
+            if translated and self.running and generation == current_generation:
+                self._emit(
+                    "on_subtitle_translated",
+                    source,
+                    translated,
+                    segment_id,
+                    not is_final,
+                )
+
+            if next_request and self.running:
+                self._submit_translation(
+                    source,
+                    next_request[0],
+                    next_request[1],
+                    next_request[2],
+                )
 
         future.add_done_callback(_translation_done)
 
