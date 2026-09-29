@@ -493,12 +493,15 @@ class OverlayWindow(QWidget):
             except Exception as exc:
                 print(f"[Shutdown] Error liberando recursos: {exc}")
             finally:
+                # The cleanup is bounded by the controller/transport timeouts.
+                # The Qt signal returns control to the UI thread so the
+                # application can exit normally.
                 self.bridge.shutdown_finished.emit()
 
         threading.Thread(
             target=cleanup,
             name="subtitle-shutdown",
-            daemon=False,
+            daemon=True,
         ).start()
 
     def _on_shutdown_finished(self):
@@ -512,6 +515,14 @@ class OverlayWindow(QWidget):
         dialog.setWindowTitle("Historial de la conversación")
         dialog.setMinimumSize(720, 520)
         dialog.setModal(True)
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: #0f1216;
+            }
+            QLabel {
+                background: transparent;
+            }
+        """)
 
         layout = QVBoxLayout(dialog)
 
@@ -558,7 +569,24 @@ class OverlayWindow(QWidget):
         buttons.addStretch()
 
         copy_button = QPushButton("📋 Copiar todo")
-        copy_button.setStyleSheet(PILL_STYLE)
+        copy_button.setStyleSheet("""
+            QPushButton {
+                background-color: #242a32;
+                color: #f1f4f7;
+                border-radius: 16px;
+                padding: 7px 14px;
+                border: 1px solid #3a434d;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #2e3640;
+            }
+            QPushButton:disabled {
+                color: #6f7b88;
+                background-color: #1b2026;
+                border-color: #2b323a;
+            }
+        """)
         copy_button.setEnabled(bool(self._history))
 
         def copy_history():
@@ -571,7 +599,18 @@ class OverlayWindow(QWidget):
         buttons.addWidget(copy_button)
 
         close_button = QPushButton("Cerrar")
-        close_button.setStyleSheet(PILL_STYLE)
+        close_button.setStyleSheet("""
+            QPushButton {
+                background-color: #242a32;
+                color: #f1f4f7;
+                border-radius: 16px;
+                padding: 7px 14px;
+                border: 1px solid #3a434d;
+            }
+            QPushButton:hover {
+                background-color: #2e3640;
+            }
+        """)
         close_button.clicked.connect(dialog.accept)
         buttons.addWidget(close_button)
 
@@ -618,8 +657,7 @@ class OverlayWindow(QWidget):
             self.controller = None
 
             # La ventana desaparece inmediatamente. El audio y los recursos del
-            # motor de transcripción terminan de liberarse en segundo plano;
-            # segundo plano; QApplication termina cuando el cleanup finaliza.
+            # motor de transcripción se liberan en segundo plano.
             self.hide()
             self._stop_controller_async(controller)
             event.ignore()
