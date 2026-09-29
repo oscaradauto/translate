@@ -1,11 +1,12 @@
-"""Desktop UI with two independent meeting modes.
+"""Desktop UI with two fully independent meeting modes.
 
-Tab 1 - Subtítulo:
-    English-only live captions for a multi-person meeting. Uses Faster-Whisper
-    locally and never invokes the assistant.
+Subtítulo:
+    English-only live captions for a ~6-person meeting using local
+    Faster-Whisper. No assistant logic is loaded or displayed.
 
-Tab 2 - Asistente:
-    Separate technical-interview UI prepared for Stage 2 / OpenAI.
+Asistente:
+    Independent technical-interview workspace for Stage 2. It has its own
+    language setting and will be connected to OpenAI separately.
 """
 
 from __future__ import annotations
@@ -18,31 +19,76 @@ from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
     QTabWidget,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
 
 
-BG = "#0d1117"
-PANEL = "#131922"
-PANEL_SOFT = "#171e28"
-BORDER = "#273140"
-TEXT = "#f2f5f8"
-MUTED = "#8b98a8"
-BLUE = "#4b8cff"
-GREEN = "#35c477"
-ORANGE = "#f5a24a"
-RED = "#ef6461"
+# Keep the visual identity of the previous app.
+APP_BG = "#0f1216"
+CARD_BG = "#151a20"
+CARD_BG_SOFT = "#181e25"
+BORDER = "#2a323c"
+TEXT = "#f0f2f5"
+MUTED = "#8f9baa"
+MUTED_DARK = "#687584"
+BLUE = "#4da6ff"
+GREEN = "#5cb85c"
+ORANGE = "#ffa64d"
+WARNING = "#f0ad4e"
+RED = "#d9534f"
 
 
 def _now() -> str:
     return time.strftime("%I:%M:%S %p")
+
+
+def _button_style(primary: bool = False) -> str:
+    if primary:
+        return f"""
+        QPushButton {{
+            background-color: {BLUE};
+            color: white;
+            border-radius: 16px;
+            padding: 7px 16px;
+            border: none;
+            font-weight: 700;
+        }}
+        QPushButton:hover {{
+            background-color: #69b4ff;
+        }}
+        QPushButton:disabled {{
+            background-color: #26313c;
+            color: #6f7b88;
+        }}
+        """
+
+    return """
+    QPushButton {
+        background-color: rgba(255,255,255,15);
+        color: #f0f2f5;
+        border-radius: 16px;
+        padding: 7px 14px;
+        border: 1px solid rgba(255,255,255,25);
+        font-weight: 600;
+    }
+    QPushButton:hover {
+        background-color: rgba(255,255,255,25);
+    }
+    QPushButton:disabled {
+        color: #6f7b88;
+        background-color: #1b2026;
+        border-color: #2b323a;
+    }
+    """
 
 
 class SubtitleBridge(QObject):
@@ -51,33 +97,43 @@ class SubtitleBridge(QObject):
     subtitle_ready = pyqtSignal(str, str, int)
 
 
-class CaptionRow(QFrame):
-    """One continuously updated caption block."""
+class CaptionCard(QFrame):
+    """A single live caption block updated by partial/final events."""
 
     def __init__(self, source: str, timestamp: str):
         super().__init__()
-        self.setObjectName("captionRow")
+        self.source = source
+        self.setObjectName("captionCard")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 9, 4, 12)
-        layout.setSpacing(5)
+        layout.setContentsMargins(14, 10, 14, 12)
+        layout.setSpacing(6)
 
         header = QHBoxLayout()
         header.setSpacing(8)
 
-        source_name = "You" if source == "YOU" else "Meeting"
-        self.source_label = QLabel(source_name)
-        self.source_label.setStyleSheet(
-            f"color: {BLUE if source == 'YOU' else ORANGE}; "
-            "font-size: 12px; font-weight: 700; background: transparent;"
+        source_name = "YOU" if source == "YOU" else "MEETING"
+        source_color = BLUE if source == "YOU" else ORANGE
+
+        badge = QLabel(source_name)
+        badge.setStyleSheet(
+            f"background-color: {source_color}; color: white; "
+            "font-size: 9px; font-weight: 800; border-radius: 8px; "
+            "padding: 3px 8px;"
         )
 
         self.time_label = QLabel(timestamp)
         self.time_label.setStyleSheet(
-            f"color: {MUTED}; font-size: 10px; background: transparent;"
+            f"color: {MUTED_DARK}; font-size: 10px; background: transparent;"
         )
 
-        header.addWidget(self.source_label)
+        self.state_label = QLabel("")
+        self.state_label.setStyleSheet(
+            f"color: {MUTED_DARK}; font-size: 9px; background: transparent;"
+        )
+
+        header.addWidget(badge)
+        header.addWidget(self.state_label)
         header.addStretch()
         header.addWidget(self.time_label)
 
@@ -87,33 +143,33 @@ class CaptionRow(QFrame):
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
         self.text_label.setStyleSheet(
-            f"color: {TEXT}; font-size: 16px; line-height: 1.4; "
-            "background: transparent;"
+            f"color: {TEXT}; font-size: 15px; background: transparent;"
         )
 
         layout.addLayout(header)
         layout.addWidget(self.text_label)
 
         self.setStyleSheet(
-            f"""
-            QFrame#captionRow {{
-                background: transparent;
-                border: none;
-                border-bottom: 1px solid {BORDER};
-            }}
+            """
+            QFrame#captionCard {
+                background-color: rgba(255,255,255,8);
+                border-radius: 12px;
+                border: 1px solid rgba(255,255,255,15);
+            }
             """
         )
 
     def set_caption(self, text: str, partial: bool) -> None:
         self.text_label.setText(text)
-        color = "#d7dde5" if partial else TEXT
+        self.state_label.setText("live" if partial else "")
         self.text_label.setStyleSheet(
-            f"color: {color}; font-size: 16px; background: transparent;"
+            f"color: {'#d7dde5' if partial else TEXT}; "
+            "font-size: 15px; background: transparent;"
         )
 
 
 class SubtitleTab(QWidget):
-    """Stage 1. English live subtitles only."""
+    """Stage 1: English live subtitles only."""
 
     def __init__(self):
         super().__init__()
@@ -122,83 +178,97 @@ class SubtitleTab(QWidget):
         self.controller = None
         self._starting = False
         self._stopping = False
-        self._entries: dict[tuple[str, int], CaptionRow] = {}
+
+        self._entries: dict[tuple[str, int], CaptionCard] = {}
         self._entry_order: list[tuple[str, int]] = []
-        self._max_entries = 40
+        self._max_entries = 60
+
+        # History is private to the Subtitle tab/session.
+        self._history: list[dict] = []
+        self._history_index: dict[tuple[str, int], int] = {}
 
         self._build_ui()
         self._connect_signals()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 20, 24, 18)
-        root.setSpacing(16)
+        root.setContentsMargins(20, 15, 20, 14)
+        root.setSpacing(11)
 
-        heading = QHBoxLayout()
+        # Header inspired by the selected reference design, using old app colors.
+        header = QHBoxLayout()
+        header.setSpacing(8)
 
-        titles = QVBoxLayout()
-        titles.setSpacing(2)
+        icon = QLabel("🎙")
+        icon.setStyleSheet(
+            "font-size: 16px; background: transparent;"
+        )
 
-        title = QLabel("Live subtitles")
+        title = QLabel("Meeting Subtitles")
         title.setStyleSheet(
-            f"color: {TEXT}; font-size: 20px; font-weight: 750;"
+            f"color: {TEXT}; font-size: 15px; font-weight: 750; "
+            "background: transparent;"
         )
-
-        subtitle = QLabel(
-            "English meeting · local transcription · approximately 6 participants"
-        )
-        subtitle.setStyleSheet(
-            f"color: {MUTED}; font-size: 11px;"
-        )
-
-        titles.addWidget(title)
-        titles.addWidget(subtitle)
 
         self.status_dot = QLabel("●")
         self.status_dot.setStyleSheet(
-            f"color: {MUTED}; font-size: 10px;"
-        )
-        self.status_label = QLabel("Ready")
-        self.status_label.setStyleSheet(
-            f"color: {MUTED}; font-size: 12px;"
+            f"color: {MUTED_DARK}; font-size: 9px; background: transparent;"
         )
 
-        self.start_button = QPushButton("Start subtitles")
+        self.status_label = QLabel("Ready")
+        self.status_label.setStyleSheet(
+            f"color: {MUTED}; font-size: 12px; background: transparent;"
+        )
+
+        language = QLabel("English")
+        language.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px; background: transparent;"
+        )
+
+        separator = QLabel("•")
+        separator.setStyleSheet(
+            f"color: {MUTED_DARK}; font-size: 10px; background: transparent;"
+        )
+
+        participants = QLabel("~6 participants")
+        participants.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px; background: transparent;"
+        )
+
+        self.history_button = QPushButton("▣  Historial")
+        self.history_button.setCursor(
+            Qt.CursorShape.PointingHandCursor
+        )
+        self.history_button.clicked.connect(self._show_history)
+        self.history_button.setStyleSheet(_button_style())
+
+        self.start_button = QPushButton("▶  Iniciar")
         self.start_button.setCursor(
             Qt.CursorShape.PointingHandCursor
         )
-        self.start_button.setMinimumHeight(34)
         self.start_button.clicked.connect(self._toggle_session)
-        self.start_button.setStyleSheet(
-            f"""
-            QPushButton {{
-                background: {BLUE};
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 7px 16px;
-                font-weight: 700;
-            }}
-            QPushButton:hover {{ background: #5a97ff; }}
-            QPushButton:disabled {{
-                background: #2b3442;
-                color: #6f7b89;
-            }}
-            """
-        )
+        self.start_button.setStyleSheet(_button_style(primary=True))
 
-        heading.addLayout(titles)
-        heading.addStretch()
-        heading.addWidget(self.status_dot)
-        heading.addWidget(self.status_label)
-        heading.addSpacing(10)
-        heading.addWidget(self.start_button)
+        header.addWidget(icon)
+        header.addWidget(title)
+        header.addSpacing(4)
+        header.addWidget(self.status_dot)
+        header.addWidget(self.status_label)
+        header.addStretch()
+        header.addWidget(language)
+        header.addWidget(separator)
+        header.addWidget(participants)
+        header.addSpacing(6)
+        header.addWidget(self.history_button)
+        header.addWidget(self.start_button)
 
-        root.addLayout(heading)
+        root.addLayout(header)
 
         divider = QFrame()
         divider.setFixedHeight(1)
-        divider.setStyleSheet(f"background: {BORDER};")
+        divider.setStyleSheet(
+            "background-color: rgba(255,255,255,18);"
+        )
         root.addWidget(divider)
 
         self.scroll_area = QScrollArea()
@@ -208,41 +278,42 @@ class SubtitleTab(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         self.scroll_area.setStyleSheet(
-            f"""
-            QScrollArea {{
+            """
+            QScrollArea {
                 background: transparent;
                 border: none;
-            }}
-            QScrollBar:vertical {{
+            }
+            QScrollBar:vertical {
                 background: transparent;
                 width: 7px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: #354153;
+                margin: 4px 0 4px 0;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(255,255,255,45);
                 border-radius: 3px;
-                min-height: 28px;
-            }}
+                min-height: 25px;
+            }
             QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical {{
+            QScrollBar::sub-line:vertical {
                 height: 0px;
-            }}
+            }
             """
         )
 
         self.caption_host = QWidget()
         self.caption_host.setStyleSheet("background: transparent;")
+
         self.caption_layout = QVBoxLayout(self.caption_host)
-        self.caption_layout.setContentsMargins(8, 2, 8, 2)
-        self.caption_layout.setSpacing(0)
+        self.caption_layout.setContentsMargins(2, 2, 2, 2)
+        self.caption_layout.setSpacing(8)
 
         self.empty_label = QLabel(
-            "Start the meeting to see English captions here."
+            "Inicia la reunión para ver los subtítulos en inglés aquí."
         )
-        self.empty_label.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setStyleSheet(
-            f"color: {MUTED}; font-size: 13px; padding: 80px;"
+            f"color: #718092; font-size: 13px; "
+            "background: transparent; padding: 70px;"
         )
 
         self.caption_layout.addWidget(self.empty_label)
@@ -252,10 +323,10 @@ class SubtitleTab(QWidget):
         root.addWidget(self.scroll_area, 1)
 
         footer = QHBoxLayout()
-        footer.setSpacing(18)
+        footer.setSpacing(14)
 
         self.mic_status = QLabel("🎤 Microphone: Ready")
-        self.system_status = QLabel("🔊 Meeting audio: Ready")
+        self.system_status = QLabel("🔊 System audio: Ready")
         self.engine_status = QLabel("⚡ Faster-Whisper: Local")
 
         for label in (
@@ -264,25 +335,20 @@ class SubtitleTab(QWidget):
             self.engine_status,
         ):
             label.setStyleSheet(
-                f"color: {MUTED}; font-size: 10px;"
+                f"color: {MUTED}; font-size: 10px; background: transparent;"
             )
 
         footer.addWidget(self.mic_status)
         footer.addWidget(self.system_status)
         footer.addStretch()
         footer.addWidget(self.engine_status)
+
         root.addLayout(footer)
 
     def _connect_signals(self) -> None:
-        self.bridge.status_changed.connect(
-            self._on_status_changed
-        )
-        self.bridge.subtitle_partial.connect(
-            self._on_subtitle_partial
-        )
-        self.bridge.subtitle_ready.connect(
-            self._on_subtitle_ready
-        )
+        self.bridge.status_changed.connect(self._on_status_changed)
+        self.bridge.subtitle_partial.connect(self._on_subtitle_partial)
+        self.bridge.subtitle_ready.connect(self._on_subtitle_ready)
 
     def _toggle_session(self) -> None:
         if self._starting or self._stopping:
@@ -296,33 +362,28 @@ class SubtitleTab(QWidget):
     def _start_session(self) -> None:
         self._starting = True
         self._clear_captions()
+        self._clear_history()
+
         self.start_button.setEnabled(False)
-        self.start_button.setText("Loading model…")
+        self.start_button.setText("⏳ Cargando...")
         self._on_status_changed("Cargando modelo local...")
 
         callbacks = {
-            "on_status": lambda text: (
-                self.bridge.status_changed.emit(text)
+            "on_status": lambda text: self.bridge.status_changed.emit(text),
+            "on_subtitle_partial": (
+                lambda source, text, segment_id:
+                self.bridge.subtitle_partial.emit(source, text, segment_id)
             ),
-            "on_subtitle_partial": lambda source, text, segment_id: (
-                self.bridge.subtitle_partial.emit(
-                    source,
-                    text,
-                    segment_id,
-                )
-            ),
-            "on_subtitle": lambda source, text, segment_id: (
-                self.bridge.subtitle_ready.emit(
-                    source,
-                    text,
-                    segment_id,
-                )
+            "on_subtitle": (
+                lambda source, text, segment_id:
+                self.bridge.subtitle_ready.emit(source, text, segment_id)
             ),
         }
 
         from vad_detector import ListenerController
 
         self.controller = ListenerController(callbacks)
+
         threading.Thread(
             target=self.controller.start,
             name="subtitle-controller",
@@ -336,7 +397,7 @@ class SubtitleTab(QWidget):
 
         self._stopping = True
         self.start_button.setEnabled(False)
-        self.start_button.setText("Stopping…")
+        self.start_button.setText("⏳ Deteniendo...")
 
         def stop_worker() -> None:
             try:
@@ -353,42 +414,44 @@ class SubtitleTab(QWidget):
         ).start()
 
     def _clear_captions(self) -> None:
-        for row in self._entries.values():
-            row.deleteLater()
+        for card in self._entries.values():
+            card.deleteLater()
 
         self._entries.clear()
         self._entry_order.clear()
         self.empty_label.show()
 
+    def _clear_history(self) -> None:
+        self._history.clear()
+        self._history_index.clear()
+
     def _ensure_entry(
         self,
         source: str,
         segment_id: int,
-    ) -> CaptionRow:
+    ) -> CaptionCard:
         key = (source, segment_id)
+
         existing = self._entries.get(key)
         if existing is not None:
             return existing
 
         self.empty_label.hide()
 
-        row = CaptionRow(source, _now())
-        insert_at = max(
-            0,
-            self.caption_layout.count() - 1,
-        )
-        self.caption_layout.insertWidget(insert_at, row)
+        card = CaptionCard(source, _now())
+        insert_at = max(0, self.caption_layout.count() - 1)
+        self.caption_layout.insertWidget(insert_at, card)
 
-        self._entries[key] = row
+        self._entries[key] = card
         self._entry_order.append(key)
 
         while len(self._entry_order) > self._max_entries:
             old_key = self._entry_order.pop(0)
-            old = self._entries.pop(old_key, None)
-            if old is not None:
-                old.deleteLater()
+            old_card = self._entries.pop(old_key, None)
+            if old_card is not None:
+                old_card.deleteLater()
 
-        return row
+        return card
 
     def _on_subtitle_partial(
         self,
@@ -396,8 +459,8 @@ class SubtitleTab(QWidget):
         text: str,
         segment_id: int,
     ) -> None:
-        row = self._ensure_entry(source, segment_id)
-        row.set_caption(text, partial=True)
+        card = self._ensure_entry(source, segment_id)
+        card.set_caption(text, partial=True)
         self._scroll_to_bottom()
 
     def _on_subtitle_ready(
@@ -406,8 +469,25 @@ class SubtitleTab(QWidget):
         text: str,
         segment_id: int,
     ) -> None:
-        row = self._ensure_entry(source, segment_id)
-        row.set_caption(text, partial=False)
+        key = (source, segment_id)
+
+        card = self._ensure_entry(source, segment_id)
+        card.set_caption(text, partial=False)
+
+        history_item = {
+            "key": key,
+            "source": source,
+            "time": _now(),
+            "english": text,
+        }
+
+        existing_index = self._history_index.get(key)
+        if existing_index is None:
+            self._history_index[key] = len(self._history)
+            self._history.append(history_item)
+        else:
+            self._history[existing_index] = history_item
+
         self._scroll_to_bottom()
 
     def _scroll_to_bottom(self) -> None:
@@ -418,6 +498,104 @@ class SubtitleTab(QWidget):
             ),
         )
 
+    def _history_plain_text(self) -> str:
+        if not self._history:
+            return ""
+
+        blocks = []
+        for item in self._history:
+            source = "YOU" if item["source"] == "YOU" else "MEETING"
+            blocks.append(
+                f"[{item['time']}] {source}\n{item['english']}"
+            )
+
+        return "\n\n".join(blocks)
+
+    def _show_history(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Historial de la conversación")
+        dialog.setMinimumSize(720, 520)
+        dialog.setModal(True)
+        dialog.setStyleSheet(
+            f"""
+            QDialog {{
+                background-color: {APP_BG};
+            }}
+            QLabel {{
+                background: transparent;
+            }}
+            """
+        )
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
+        header = QHBoxLayout()
+
+        title = QLabel(
+            f"Historial de la conversación · "
+            f"{len(self._history)} intervenciones"
+        )
+        title.setStyleSheet(
+            f"color: {TEXT}; font-size: 15px; font-weight: 750;"
+        )
+
+        header.addWidget(title)
+        header.addStretch()
+        layout.addLayout(header)
+
+        history_view = QTextBrowser()
+        history_view.setOpenExternalLinks(False)
+        history_view.setStyleSheet(
+            f"""
+            QTextBrowser {{
+                background-color: {CARD_BG};
+                color: #e7ebef;
+                border: 1px solid {BORDER};
+                border-radius: 10px;
+                padding: 12px;
+                font-size: 13px;
+            }}
+            """
+        )
+
+        history_text = self._history_plain_text()
+        if history_text:
+            history_view.setPlainText(history_text)
+        else:
+            history_view.setPlainText(
+                "Todavía no hay intervenciones en el historial."
+            )
+
+        layout.addWidget(history_view, 1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+
+        copy_button = QPushButton("📋 Copiar todo")
+        copy_button.setStyleSheet(_button_style())
+        copy_button.setEnabled(bool(history_text))
+
+        def copy_history() -> None:
+            QApplication.clipboard().setText(history_text)
+            copy_button.setText("✓ Copiado")
+            QTimer.singleShot(
+                1200,
+                lambda: copy_button.setText("📋 Copiar todo"),
+            )
+
+        copy_button.clicked.connect(copy_history)
+        buttons.addWidget(copy_button)
+
+        close_button = QPushButton("Cerrar")
+        close_button.setStyleSheet(_button_style())
+        close_button.clicked.connect(dialog.accept)
+        buttons.addWidget(close_button)
+
+        layout.addLayout(buttons)
+        dialog.exec()
+
     def _on_status_changed(self, text: str) -> None:
         loading = text.startswith("Cargando")
         listening = text.startswith("Escuchando")
@@ -427,23 +605,24 @@ class SubtitleTab(QWidget):
         if loading:
             self._starting = True
             self.status_dot.setStyleSheet(
-                f"color: {ORANGE}; font-size: 10px;"
+                f"color: {WARNING}; font-size: 9px; background: transparent;"
             )
-            self.status_label.setText("Loading local model")
+            self.status_label.setText("Loading")
             return
 
         if listening:
             self._starting = False
             self._stopping = False
+
             self.status_dot.setStyleSheet(
-                f"color: {GREEN}; font-size: 10px;"
+                f"color: {GREEN}; font-size: 9px; background: transparent;"
             )
             self.status_label.setText("Listening")
-            self.start_button.setText("Stop subtitles")
+            self.start_button.setText("■  Detener")
             self.start_button.setEnabled(True)
 
             mic_connected = "solo audio de reunión" not in text
-            meeting_connected = "solo micrófono" not in text
+            system_connected = "solo micrófono" not in text
 
             self.mic_status.setText(
                 "🎤 Microphone: Connected"
@@ -451,9 +630,9 @@ class SubtitleTab(QWidget):
                 else "🎤 Microphone: Unavailable"
             )
             self.system_status.setText(
-                "🔊 Meeting audio: Connected"
-                if meeting_connected
-                else "🔊 Meeting audio: Unavailable"
+                "🔊 System audio: Connected"
+                if system_connected
+                else "🔊 System audio: Unavailable"
             )
             return
 
@@ -461,27 +640,27 @@ class SubtitleTab(QWidget):
             self.controller = None
             self._starting = False
             self._stopping = False
+
             self.status_dot.setStyleSheet(
-                f"color: {MUTED}; font-size: 10px;"
+                f"color: {MUTED_DARK}; font-size: 9px; background: transparent;"
             )
             self.status_label.setText("Ready")
-            self.start_button.setText("Start subtitles")
+            self.start_button.setText("▶  Iniciar")
             self.start_button.setEnabled(True)
             self.mic_status.setText("🎤 Microphone: Ready")
-            self.system_status.setText(
-                "🔊 Meeting audio: Ready"
-            )
+            self.system_status.setText("🔊 System audio: Ready")
             return
 
         if error:
             self.controller = None
             self._starting = False
             self._stopping = False
+
             self.status_dot.setStyleSheet(
-                f"color: {RED}; font-size: 10px;"
+                f"color: {RED}; font-size: 9px; background: transparent;"
             )
             self.status_label.setText("Error")
-            self.start_button.setText("Start subtitles")
+            self.start_button.setText("▶  Iniciar")
             self.start_button.setEnabled(True)
             self.engine_status.setText(
                 "⚠ Faster-Whisper: check console"
@@ -493,6 +672,7 @@ class SubtitleTab(QWidget):
     def shutdown(self) -> None:
         controller = self.controller
         self.controller = None
+
         if controller is not None:
             try:
                 controller.stop()
@@ -501,7 +681,7 @@ class SubtitleTab(QWidget):
 
 
 class AssistantTab(QWidget):
-    """Independent Stage 2 screen. OpenAI wiring is intentionally separate."""
+    """Stage 2 workspace. Completely independent from SubtitleTab."""
 
     def __init__(self):
         super().__init__()
@@ -509,160 +689,147 @@ class AssistantTab(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 20, 24, 20)
-        root.setSpacing(18)
+        root.setContentsMargins(20, 15, 20, 16)
+        root.setSpacing(12)
 
-        heading = QHBoxLayout()
+        header = QHBoxLayout()
+        header.setSpacing(8)
 
-        titles = QVBoxLayout()
-        titles.setSpacing(2)
+        icon = QLabel("✦")
+        icon.setStyleSheet(
+            f"color: {BLUE}; font-size: 16px; background: transparent;"
+        )
 
-        title = QLabel("Technical interview assistant")
+        title = QLabel("Technical Interview Assistant")
         title.setStyleSheet(
-            f"color: {TEXT}; font-size: 20px; font-weight: 750;"
+            f"color: {TEXT}; font-size: 15px; font-weight: 750; "
+            "background: transparent;"
         )
-        subtitle = QLabel(
-            "Independent interview session · 2–3 participants · OpenAI"
-        )
+
+        subtitle = QLabel("2–3 participants")
         subtitle.setStyleSheet(
-            f"color: {MUTED}; font-size: 11px;"
+            f"color: {MUTED}; font-size: 11px; background: transparent;"
         )
 
-        titles.addWidget(title)
-        titles.addWidget(subtitle)
-
-        language_label = QLabel("Answer language")
+        language_label = QLabel("Answer:")
         language_label.setStyleSheet(
-            f"color: {MUTED}; font-size: 10px;"
+            f"color: {MUTED}; font-size: 11px; background: transparent;"
         )
 
         self.language_combo = QComboBox()
         self.language_combo.addItem("English", "en")
         self.language_combo.addItem("Español", "es")
-        self.language_combo.setMinimumWidth(110)
+        self.language_combo.setMinimumWidth(105)
         self.language_combo.setStyleSheet(
             f"""
             QComboBox {{
-                background: {PANEL_SOFT};
+                background-color: rgba(255,255,255,15);
                 color: {TEXT};
-                border: 1px solid {BORDER};
-                border-radius: 7px;
-                padding: 6px 10px;
+                border: 1px solid rgba(255,255,255,25);
+                border-radius: 8px;
+                padding: 5px 9px;
             }}
             QComboBox QAbstractItemView {{
-                background: {PANEL_SOFT};
+                background-color: {CARD_BG_SOFT};
                 color: {TEXT};
                 selection-background-color: {BLUE};
             }}
             """
         )
 
-        lang_box = QVBoxLayout()
-        lang_box.setSpacing(3)
-        lang_box.addWidget(language_label)
-        lang_box.addWidget(self.language_combo)
-
-        heading.addLayout(titles)
-        heading.addStretch()
-        heading.addLayout(lang_box)
-        root.addLayout(heading)
-
-        info = QFrame()
-        info.setStyleSheet(
-            f"""
-            QFrame {{
-                background: {PANEL_SOFT};
-                border: 1px solid {BORDER};
-                border-radius: 12px;
-            }}
-            """
-        )
-        info_layout = QVBoxLayout(info)
-        info_layout.setContentsMargins(18, 16, 18, 16)
-        info_layout.setSpacing(7)
-
-        info_title = QLabel("Stage 2 · OpenAI assistant")
-        info_title.setStyleSheet(
-            f"color: {TEXT}; font-size: 14px; font-weight: 700;"
-        )
-        info_text = QLabel(
-            "This screen is intentionally independent from Live Subtitles. "
-            "The next Stage 2 change will add interview transcription, "
-            "conversation context, technical-question detection and streamed "
-            "answers in the selected language."
-        )
-        info_text.setWordWrap(True)
-        info_text.setStyleSheet(
-            f"color: {MUTED}; font-size: 12px;"
+        self.interview_button = QPushButton("▶  Iniciar entrevista")
+        self.interview_button.setStyleSheet(_button_style(primary=True))
+        self.interview_button.setEnabled(False)
+        self.interview_button.setToolTip(
+            "Stage 2 will be connected to OpenAI in the next implementation."
         )
 
-        info_layout.addWidget(info_title)
-        info_layout.addWidget(info_text)
-        root.addWidget(info)
+        header.addWidget(icon)
+        header.addWidget(title)
+        header.addWidget(subtitle)
+        header.addStretch()
+        header.addWidget(language_label)
+        header.addWidget(self.language_combo)
+        header.addSpacing(6)
+        header.addWidget(self.interview_button)
+
+        root.addLayout(header)
+
+        divider = QFrame()
+        divider.setFixedHeight(1)
+        divider.setStyleSheet(
+            "background-color: rgba(255,255,255,18);"
+        )
+        root.addWidget(divider)
 
         conversation_title = QLabel("Conversation")
         conversation_title.setStyleSheet(
-            f"color: {TEXT}; font-size: 13px; font-weight: 700;"
+            f"color: {TEXT}; font-size: 12px; font-weight: 700; "
+            "background: transparent;"
         )
         root.addWidget(conversation_title)
 
         conversation = QFrame()
-        conversation.setMinimumHeight(130)
+        conversation.setObjectName("assistantPanel")
+        conversation.setMinimumHeight(170)
         conversation.setStyleSheet(
-            f"""
-            QFrame {{
-                background: {PANEL};
-                border: 1px solid {BORDER};
-                border-radius: 10px;
-            }}
+            """
+            QFrame#assistantPanel {
+                background-color: rgba(255,255,255,8);
+                border-radius: 12px;
+                border: 1px solid rgba(255,255,255,15);
+            }
             """
         )
+
         conversation_layout = QVBoxLayout(conversation)
         conversation_placeholder = QLabel(
-            "Interview transcript will appear here."
+            "The interview transcript will appear here."
         )
         conversation_placeholder.setAlignment(
             Qt.AlignmentFlag.AlignCenter
         )
         conversation_placeholder.setStyleSheet(
-            f"color: {MUTED}; font-size: 12px;"
+            f"color: {MUTED}; font-size: 12px; background: transparent;"
         )
         conversation_layout.addWidget(conversation_placeholder)
-        root.addWidget(conversation)
+
+        root.addWidget(conversation, 1)
 
         answer_title = QLabel("Suggested answer")
         answer_title.setStyleSheet(
-            f"color: {TEXT}; font-size: 13px; font-weight: 700;"
+            f"color: {TEXT}; font-size: 12px; font-weight: 700; "
+            "background: transparent;"
         )
         root.addWidget(answer_title)
 
         answer = QFrame()
-        answer.setMinimumHeight(120)
+        answer.setObjectName("answerPanel")
+        answer.setMinimumHeight(150)
         answer.setStyleSheet(
             f"""
-            QFrame {{
-                background: {PANEL};
-                border: 1px solid {BORDER};
-                border-radius: 10px;
+            QFrame#answerPanel {{
+                background-color: {CARD_BG_SOFT};
+                border-radius: 12px;
+                border: 1px solid rgba(77,166,255,45);
             }}
             """
         )
+
         answer_layout = QVBoxLayout(answer)
         answer_placeholder = QLabel(
-            "OpenAI response will stream here after a technical "
-            "question is detected."
+            "OpenAI answers will appear here when Stage 2 is enabled."
         )
         answer_placeholder.setWordWrap(True)
         answer_placeholder.setAlignment(
             Qt.AlignmentFlag.AlignCenter
         )
         answer_placeholder.setStyleSheet(
-            f"color: {MUTED}; font-size: 12px;"
+            f"color: {MUTED}; font-size: 12px; background: transparent;"
         )
         answer_layout.addWidget(answer_placeholder)
-        root.addWidget(answer)
 
-        root.addStretch()
+        root.addWidget(answer)
 
 
 class MainWindow(QWidget):
@@ -683,23 +850,23 @@ class MainWindow(QWidget):
         self.setAttribute(
             Qt.WidgetAttribute.WA_TranslucentBackground
         )
-        self.setMinimumSize(760, 520)
-        self.resize(920, 640)
-        self.move(55, 55)
+        self.setMinimumSize(760, 500)
+        self.resize(900, 560)
+        self.move(60, 60)
 
     def _build_ui(self) -> None:
         shell = QFrame()
-        shell.setObjectName("shell")
+        shell.setObjectName("mainCard")
         shell.setStyleSheet(
-            f"""
-            QFrame#shell {{
-                background: {BG};
-                border: 1px solid {BORDER};
-                border-radius: 14px;
-            }}
-            QLabel {{
+            """
+            QFrame#mainCard {
+                background-color: rgba(15, 18, 22, 242);
+                border-radius: 16px;
+                border: 1px solid rgba(255,255,255,20);
+            }
+            QLabel {
                 background: transparent;
-            }}
+            }
             """
         )
 
@@ -711,15 +878,18 @@ class MainWindow(QWidget):
         shell_layout.setContentsMargins(0, 0, 0, 0)
         shell_layout.setSpacing(0)
 
+        # Window/title row.
         title_bar = QHBoxLayout()
-        title_bar.setContentsMargins(20, 12, 12, 8)
+        title_bar.setContentsMargins(18, 10, 10, 4)
+        title_bar.setSpacing(8)
 
-        title = QLabel("Meeting Assistant")
-        title.setStyleSheet(
-            f"color: {TEXT}; font-size: 13px; font-weight: 700;"
+        app_title = QLabel("Meeting Assistant")
+        app_title.setStyleSheet(
+            f"color: {TEXT}; font-size: 13px; font-weight: 750;"
         )
-        pin = QLabel("📌 Always on top")
-        pin.setStyleSheet(
+
+        always_on_top = QLabel("📌 Always on top")
+        always_on_top.setStyleSheet(
             f"color: {MUTED}; font-size: 10px;"
         )
 
@@ -730,26 +900,27 @@ class MainWindow(QWidget):
         )
         close_button.clicked.connect(self.close)
         close_button.setStyleSheet(
-            f"""
-            QPushButton {{
+            """
+            QPushButton {
                 background: transparent;
-                color: {MUTED};
+                color: #8f9baa;
                 border: none;
-                border-radius: 7px;
+                border-radius: 8px;
                 font-size: 19px;
-            }}
-            QPushButton:hover {{
-                background: #392126;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: rgba(255,80,80,50);
                 color: white;
-            }}
+            }
             """
         )
 
-        title_bar.addWidget(title)
+        title_bar.addWidget(app_title)
         title_bar.addStretch()
-        title_bar.addWidget(pin)
-        title_bar.addSpacing(8)
+        title_bar.addWidget(always_on_top)
         title_bar.addWidget(close_button)
+
         shell_layout.addLayout(title_bar)
 
         self.tabs = QTabWidget()
@@ -758,16 +929,16 @@ class MainWindow(QWidget):
             f"""
             QTabWidget::pane {{
                 border: none;
-                background: {BG};
+                background: transparent;
             }}
             QTabBar {{
-                background: {BG};
+                background: transparent;
             }}
             QTabBar::tab {{
                 background: transparent;
                 color: {MUTED};
                 border: none;
-                padding: 10px 20px;
+                padding: 9px 18px;
                 margin-left: 8px;
                 font-size: 12px;
                 font-weight: 650;
@@ -788,7 +959,7 @@ class MainWindow(QWidget):
         self.tabs.addTab(self.subtitle_tab, "Subtítulo")
         self.tabs.addTab(self.assistant_tab, "Asistente")
 
-        # Stage 1 is always the default screen.
+        # Stage 1 is always selected when the app starts.
         self.tabs.setCurrentIndex(0)
 
         shell_layout.addWidget(self.tabs, 1)
@@ -807,8 +978,7 @@ class MainWindow(QWidget):
             and event.buttons() & Qt.MouseButton.LeftButton
         ):
             self.move(
-                event.globalPosition().toPoint()
-                - self._drag_pos
+                event.globalPosition().toPoint() - self._drag_pos
             )
         super().mouseMoveEvent(event)
 
