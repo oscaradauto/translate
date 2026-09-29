@@ -62,7 +62,6 @@ class RealtimeTranscriptionSession:
         self._startup_error: Exception | None = None
         self._draining = False
         self._error_reported = False
-        self._error_reported = False
 
     @property
     def is_running(self) -> bool:
@@ -88,6 +87,7 @@ class RealtimeTranscriptionSession:
         self._audio_buffered = False
         self._startup_error = None
         self._draining = False
+        self._error_reported = False
 
         self._thread = threading.Thread(
             target=self._run,
