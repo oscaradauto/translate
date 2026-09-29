@@ -384,7 +384,24 @@ class ListenerController:
 
     def _on_source_error(self, source: str, exc: Exception) -> None:
         print(f"[{source}] {exc}")
-        self._emit("on_status", f"Error {source}")
+
+        mic_alive = bool(
+            self.mic_streamer
+            and self.mic_streamer.session
+            and self.mic_streamer.session.is_running
+        )
+        companion_alive = bool(
+            self.loopback_streamer
+            and self.loopback_streamer.session
+            and self.loopback_streamer.session.is_running
+        )
+
+        if mic_alive and not companion_alive:
+            self._emit("on_status", "Escuchando (solo YOU)")
+        elif companion_alive and not mic_alive:
+            self._emit("on_status", "Escuchando (solo COMPANION)")
+        elif not mic_alive and not companion_alive:
+            self._emit("on_status", "Error de audio")
 
     def stop(self) -> None:
         if not self.running and not self.mic_streamer and not self.loopback_streamer:
