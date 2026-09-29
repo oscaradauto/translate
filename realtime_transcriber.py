@@ -53,11 +53,14 @@ class RealtimeTranscriptionSession:
         self._closing = False
         self._closed_event = threading.Event()
         self._ready_event = threading.Event()
+        self._startup_event = threading.Event()
         self._send_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._ws: websocket.WebSocket | None = None
         self._audio_buffered = False
         self._partial_buffers: dict[str, str] = {}
+        self._startup_error: Exception | None = None
+        self._draining = False
 
     @property
     def is_running(self) -> bool:
@@ -78,8 +81,11 @@ class RealtimeTranscriptionSession:
         self._closing = False
         self._closed_event.clear()
         self._ready_event.clear()
+        self._startup_event.clear()
         self._partial_buffers.clear()
         self._audio_buffered = False
+        self._startup_error = None
+        self._draining = False
 
         self._thread = threading.Thread(
             target=self._run,
@@ -88,13 +94,22 @@ class RealtimeTranscriptionSession:
         )
         self._thread.start()
 
-        if not self._ready_event.wait(timeout):
+        if not self._startup_event.wait(timeout):
             self._running = False
             self._close_socket()
             raise TimeoutError(
                 f"No se pudo establecer la sesión de transcripción para "
                 f"{self.source}."
             )
+
+        if not self._ready_event.is_set():
+            error = self._startup_error or RuntimeError(
+                f"No se pudo establecer la sesión de transcripción para "
+                f"{self.source}."
+            )
+            self._running = False
+            self._close_socket()
+            raise error
 
     def append_audio(self, pcm16: bytes) -> bool:
         if not pcm16 or not self._running or self._closing:
@@ -136,9 +151,10 @@ class RealtimeTranscriptionSession:
         self._running = False
 
         if ws:
-            self._closing = True
+            self._draining = True
 
-            # Flush the current audio turn before closing the transport.
+            # Commit the current turn. The transcription API emits the final
+            # transcript for committed audio through the normal receive loop.
             if self._audio_buffered:
                 try:
                     self._send({"type": "input_audio_buffer.commit"})
@@ -146,14 +162,10 @@ class RealtimeTranscriptionSession:
                     pass
                 self._audio_buffered = False
 
-            try:
-                self._send({"type": "session.close"})
-            except Exception:
-                pass
+            # Keep receiving briefly so the final transcript can arrive.
+            self._closed_event.wait(3.0)
 
-            # Give the receive loop time to consume final transcription events.
-            self._closed_event.wait(5.0)
-
+        self._draining = False
         self._close_socket()
 
         if thread and thread.is_alive():
@@ -180,9 +192,11 @@ class RealtimeTranscriptionSession:
             self._notify_status("connecting")
 
             # Wait for the server to create the session before configuring it.
-            while self._running and not self._closing:
+            while (self._running or self._draining) and not self._closing:
                 event = self._recv_event()
                 if event is None:
+                    if self._draining and self._closed_event.is_set():
+                        break
                     continue
                 if event.get("type") == "session.created":
                     break
@@ -226,6 +240,7 @@ class RealtimeTranscriptionSession:
 
                 if event_type == "session.updated":
                     self._ready_event.set()
+                    self._startup_event.set()
                     self._notify_status("connected")
                     continue
 
@@ -257,8 +272,11 @@ class RealtimeTranscriptionSession:
                     raise RuntimeError(self._format_error(event))
 
         except Exception as exc:
+            if not self._ready_event.is_set():
+                self._startup_error = exc
             self._report_error(exc)
         finally:
+            self._startup_event.set()
             self._closed_event.set()
             self._close_socket()
 
@@ -306,6 +324,12 @@ class RealtimeTranscriptionSession:
                 ws.close()
             except Exception:
                 pass
+
+    def _format_error(self, event: dict) -> str:
+        error = event.get("error") or {}
+        code = error.get("code")
+        message = error.get("message") or "Error de la API de transcripción."
+        return f"{code}: {message}" if code else str(message)
 
     def _notify_status(self, status: str) -> None:
         if self.on_status:
