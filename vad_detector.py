@@ -20,6 +20,7 @@ import webrtcvad
 from scipy.signal import resample_poly
 
 from config import (
+    LOCAL_SPEECH_GATE_HOLD_MS,
     MEETING_MIN_VOICED_MS,
     MEETING_SPEECH_START_MS,
     MEETING_VAD_MODE,
@@ -42,6 +43,31 @@ VAD_FRAME_MS = 30
 PRE_ROLL_MS = 240
 
 _PRE_ROLL_FRAMES = max(1, PRE_ROLL_MS // VAD_FRAME_MS)
+
+
+class _LocalSpeechGate:
+    """Coordinates source ownership between microphone and meeting loopback.
+
+    When the physical microphone detects local speech, YOU wins for a short
+    interval. The meeting loopback is suppressed during that interval so a
+    locally spoken sentence cannot also be emitted as MEETING.
+    """
+
+    def __init__(self, hold_ms: int) -> None:
+        self._hold_seconds = max(0.0, hold_ms / 1000.0)
+        self._active_until = 0.0
+        self._lock = threading.Lock()
+
+    def mark_local_speech(self, now: float) -> None:
+        with self._lock:
+            self._active_until = max(
+                self._active_until,
+                now + self._hold_seconds,
+            )
+
+    def is_local_speech_active(self, now: float) -> bool:
+        with self._lock:
+            return now <= self._active_until
 
 
 def _pcm16_to_float32(pcm16: bytes) -> np.ndarray:
@@ -182,6 +208,17 @@ class _SpeechSegmenter:
         if self._speech_active and self._frames:
             self._finalize()
 
+    def abort(self) -> None:
+        """Drop the current candidate/utterance without transcribing it."""
+        self._speech_active = False
+        self._segment_id = None
+        self._frames = []
+        self._last_speech_time = 0.0
+        self._last_partial_time = 0.0
+        self._speech_candidate_frames = 0
+        self._voiced_frames = 0
+        self._pre_roll.clear()
+
     def _submit_partial(self) -> None:
         if self._segment_id is None or not self._frames:
             return
@@ -229,11 +266,13 @@ class LocalMicStreamer:
         device_index: int,
         transcriber: LocalWhisperTranscriber,
         next_segment_id: Callable[[], int],
+        local_speech_gate: _LocalSpeechGate,
         on_error,
     ) -> None:
         self.device_index = device_index
         self.transcriber = transcriber
         self.next_segment_id = next_segment_id
+        self.local_speech_gate = local_speech_gate
         self.on_error = on_error
 
         self.running = False
@@ -265,6 +304,33 @@ class LocalMicStreamer:
     def _open_microphone_stream(self):
         errors: list[str] = []
 
+        device_index = self.device_index
+        if device_index < 0:
+            try:
+                device_index = int(
+                    self.audio.get_default_input_device_info()["index"]
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"No se pudo detectar el micrófono predeterminado: {exc}"
+                ) from exc
+
+        try:
+            device_info = self.audio.get_device_info_by_index(device_index)
+            device_name = device_info.get("name", f"device {device_index}")
+            max_inputs = int(device_info.get("maxInputChannels", 0))
+            if max_inputs < 1:
+                raise RuntimeError(
+                    f"El dispositivo #{device_index} no es un dispositivo de entrada."
+                )
+            print(f"[Audio:YOU] Micrófono #{device_index}: {device_name}")
+        except Exception as exc:
+            raise RuntimeError(
+                f"No se pudo validar el micrófono #{device_index}: {exc}"
+            ) from exc
+
+        self.device_index = device_index
+
         for sample_rate in (
             PREFERRED_MIC_SAMPLE_RATE,
             FALLBACK_MIC_SAMPLE_RATE,
@@ -276,7 +342,7 @@ class LocalMicStreamer:
                     channels=1,
                     rate=sample_rate,
                     input=True,
-                    input_device_index=self.device_index,
+                    input_device_index=device_index,
                     frames_per_buffer=frames,
                 )
                 self.sample_rate = sample_rate
@@ -316,6 +382,11 @@ class LocalMicStreamer:
                     _is_speech(target_pcm16, TARGET_SAMPLE_RATE, vad)
                     and _dbfs(target_pcm16) >= MIC_MIN_DBFS
                 )
+
+                if speech:
+                    # The physical mic is the source of truth for YOU.
+                    self.local_speech_gate.mark_local_speech(now)
+
                 segmenter.process(target_pcm16, speech, now)
         except Exception as exc:
             if self.running:
@@ -356,10 +427,12 @@ class LocalSystemAudioStreamer:
         self,
         transcriber: LocalWhisperTranscriber,
         next_segment_id: Callable[[], int],
+        local_speech_gate: _LocalSpeechGate,
         on_error,
     ) -> None:
         self.transcriber = transcriber
         self.next_segment_id = next_segment_id
+        self.local_speech_gate = local_speech_gate
         self.on_error = on_error
         self.running = False
         self.thread: threading.Thread | None = None
@@ -418,6 +491,16 @@ class LocalSystemAudioStreamer:
                         pcm16,
                         SYSTEM_SAMPLE_RATE,
                     )
+                    now = time.monotonic()
+
+                    # If the physical microphone is currently detecting the
+                    # local user, YOU owns this time window. Drop loopback
+                    # audio instead of allowing the same voice to be labelled
+                    # as a remote meeting participant.
+                    if self.local_speech_gate.is_local_speech_active(now):
+                        segmenter.abort()
+                        continue
+
                     speech = _is_speech(
                         target_pcm16,
                         TARGET_SAMPLE_RATE,
@@ -426,7 +509,7 @@ class LocalSystemAudioStreamer:
                     segmenter.process(
                         target_pcm16,
                         speech,
-                        time.monotonic(),
+                        now,
                     )
         except Exception as exc:
             if self.running:
@@ -455,6 +538,9 @@ class ListenerController:
 
         self._segment_counter = 0
         self._counter_lock = threading.Lock()
+        self._local_speech_gate = _LocalSpeechGate(
+            LOCAL_SPEECH_GATE_HOLD_MS
+        )
 
     def _next_segment_id(self) -> int:
         with self._counter_lock:
@@ -532,6 +618,7 @@ class ListenerController:
                 self.mic_device,
                 self.transcriber,
                 self._next_segment_id,
+                self._local_speech_gate,
                 self._on_capture_error,
             )
             self.mic_streamer.start()
@@ -544,6 +631,7 @@ class ListenerController:
             self.loopback_streamer = LocalSystemAudioStreamer(
                 self.transcriber,
                 self._next_segment_id,
+                self._local_speech_gate,
                 self._on_capture_error,
             )
             self.loopback_streamer.start()
