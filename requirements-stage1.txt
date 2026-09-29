@@ -1,0 +1,9 @@
+# Stage 1 runtime
+PyQt6
+numpy
+scipy
+soundcard
+PyAudio
+webrtcvad-wheels
+websocket-client
+python-dotenv
