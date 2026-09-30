@@ -14,6 +14,9 @@ from typing import Callable
 from config import (
     INTERVIEW_CONTEXT_TURNS,
     INTERVIEW_QUESTION_DEBOUNCE_SECONDS,
+    INTERVIEW_TRANSCRIPTION_LANGUAGE,
+    INTERVIEW_WHISPER_INITIAL_PROMPT,
+    INTERVIEW_WHISPER_MODEL,
     MIC_DEVICE_INDEX,
 )
 from interview_assistant import (
@@ -77,9 +80,18 @@ class InterviewController:
             "on_subtitle": self._on_final,
         }
 
+        transcription_language = (
+            None
+            if INTERVIEW_TRANSCRIPTION_LANGUAGE == "auto"
+            else INTERVIEW_TRANSCRIPTION_LANGUAGE
+        )
+
         self.listener = ListenerController(
             callbacks,
             mic_device=self.mic_device,
+            whisper_model=INTERVIEW_WHISPER_MODEL,
+            transcription_language=transcription_language,
+            initial_prompt=INTERVIEW_WHISPER_INITIAL_PROMPT,
         )
         self.listener.start()
 
