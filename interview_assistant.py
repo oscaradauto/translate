@@ -58,18 +58,19 @@ Devuelve únicamente la respuesta que el entrevistado podría decir de forma nat
 
 CODING_PROMPT_EN = """You are a senior software engineer assisting during a live coding / whiteboarding interview.
 OUTPUT LANGUAGE IS LOCKED TO ENGLISH.
-The spoken explanation must be in English. Code identifiers and comments should use normal professional conventions.
+The spoken explanation must be in English.
+ABSOLUTE CODE RULE: generated code must contain ZERO comments. Do not emit Javadoc, block comments, line comments, explanatory comments, TODOs, or commented-out code unless the interviewer explicitly asks for comments.
 Use the ACTIVE CODING CONTEXT. Follow-ups such as "implement it", "same with streams", "without extra memory", "optimize it", "what is the complexity?", and "what about nulls?" refer to the active problem unless a new problem is explicitly introduced.
 Never silently switch to a different problem.
 Preserve the previous solution's intent unless the interviewer asks for a different approach or constraint.
 For an approach-only question, give a concise spoken approach and complexity; do not dump code unless requested.
 When implementation or a modified implementation is requested, format the response exactly as plain text sections:
 Approach:
-<1-3 concise spoken sentences>
+<1 concise spoken sentence>
 Complexity:
-<time and space complexity>
+<time and space complexity in one short line>
 Code:
-<complete implementation, no Markdown code fences>
+<complete implementation, no Markdown code fences and zero comments>
 For complexity-only, testing-only, or edge-case follow-ups, answer only what was asked unless code is required.
 Prefer simple interview-quality code over framework-heavy or clever code.
 Do not invent requirements that were not stated.
@@ -77,18 +78,19 @@ Return content the candidate can quickly read and use during the interview."""
 
 CODING_PROMPT_ES = """Eres un desarrollador senior ayudando durante una entrevista de coding / whiteboarding en vivo.
 EL IDIOMA DE SALIDA ESTÁ BLOQUEADO EN ESPAÑOL.
-La explicación oral debe estar en español. Los identificadores y comentarios del código deben seguir convenciones profesionales normales.
+La explicación oral debe estar en español.
+REGLA ABSOLUTA DE CÓDIGO: el código generado debe contener CERO comentarios. No generes Javadoc, comentarios de bloque, comentarios de línea, comentarios explicativos, TODOs ni código comentado salvo que el entrevistador pida comentarios explícitamente.
 Usa el CONTEXTO DE CODING ACTIVO. Follow-ups como "impleméntalo", "haz lo mismo con streams", "sin memoria extra", "optimízalo", "cuál es la complejidad" o "qué pasa con null" se refieren al problema activo salvo que se introduzca explícitamente un problema nuevo.
 Nunca cambies silenciosamente a otro problema.
 Conserva la intención de la solución anterior salvo que el entrevistador pida otro enfoque o una nueva restricción.
 Si solo piden el enfoque, da una explicación breve y la complejidad; no muestres código salvo que lo pidan.
 Cuando pidan implementación o modificar la implementación, usa exactamente estas secciones de texto plano:
 Approach:
-<1-3 frases breves para decir oralmente>
+<1 frase breve para decir oralmente>
 Complexity:
-<complejidad temporal y espacial>
+<complejidad temporal y espacial en una línea corta>
 Code:
-<implementación completa, sin fences Markdown>
+<implementación completa, sin fences Markdown y sin comentarios>
 Para follow-ups solo de complejidad, pruebas o edge cases, responde únicamente lo solicitado salvo que haga falta código.
 Prefiere código simple y apropiado para entrevista en lugar de soluciones innecesariamente complejas.
 No inventes requisitos que no fueron indicados.
@@ -134,6 +136,9 @@ Rules:
 - Behavioral questions about stakeholders, coworkers, conflict, leadership, teamwork, strengths, weaknesses, or similar personal-work stories must be interview_type="behavioral" and action="IGNORE".
 - Greetings, thanks, scheduling, salary, company descriptions, and generic small talk must be interview_type="other" and action="IGNORE".
 - ANSWER technical and coding questions/requests that can now be answered.
+- Explicit implementation requests must not be ignored. Examples: "write a Java method that...", "implement a function to...", "haz un método en Java que...", "crea una función que...", "escribe código para...".
+- If an explicit implementation request contains a concrete operation (for example convert, return, find, sort, validate, calculate, convertir, devolver, buscar, ordenar, validar, calcular), classify it as interview_type="coding", coding.request="implementation", and action="ANSWER" unless the utterance is genuinely incomplete.
+- If an explicit self-contained implementation request describes a different operation/input/output than the ACTIVE CODING CONTEXT, set coding.new_problem=true and put that full new problem in coding.problem.
 - WAIT when the latest turn sounds incomplete and more speech is likely needed.
 - A technical/coding question may be in English, Spanish, or mixed.
 - The reconstructed question should remain in the language in which the question was most likely asked.
@@ -228,6 +233,52 @@ class GroqInterviewAssistant:
             )
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _explicit_implementation_request(
+        raw_turn: str,
+        reconstructed: str,
+    ) -> tuple[bool, bool]:
+        """Return (is_implementation, looks_self_contained)."""
+        text = " ".join(
+            f"{raw_turn} {reconstructed}".casefold().split()
+        )
+
+        implementation_patterns = (
+            r"\b(?:hacer|haz|crea|crear|escribe|escribir|implementa|implementar)"
+            r"\b.{0,100}\b(?:c[oó]digo|m[eé]todo|funci[oó]n|clase)\b",
+            r"\b(?:puedes|podr[ií]as)\s+(?:hacer|crear|escribir|implementar)"
+            r"\b.{0,100}\b(?:c[oó]digo|m[eé]todo|funci[oó]n|clase)\b",
+            r"\b(?:write|create|build|implement|code)"
+            r"\b.{0,100}\b(?:code|method|function|class)\b",
+            r"\b(?:can|could)\s+you\s+(?:write|create|build|implement|code)"
+            r"\b.{0,100}\b(?:method|function|class|it|this|that)?\b",
+        )
+        is_implementation = any(
+            re.search(pattern, text)
+            for pattern in implementation_patterns
+        )
+
+        operation_pattern = (
+            r"\b(?:convierta|convertir|convierte|devuelva|devolver|retorne|"
+            r"retornar|busque|buscar|ordene|ordenar|valide|validar|calcule|"
+            r"calcular|encuentre|encontrar|parsear|transformar|"
+            r"convert|converts|return|returns|find|sort|validate|calculate|"
+            r"parse|transform)\b"
+        )
+        has_operation = bool(re.search(operation_pattern, text))
+
+        # Pronoun-heavy requests are follow-ups to the active problem, not a
+        # new self-contained exercise.
+        reference_pattern = (
+            r"\b(?:lo mismo|la misma|eso|esto|anterior|it|that|this|same)\b"
+        )
+        has_reference = bool(re.search(reference_pattern, text))
+
+        return (
+            is_implementation and has_operation,
+            is_implementation and has_operation and not has_reference,
+        )
 
     def analyze_turn(
         self,
@@ -345,6 +396,34 @@ class GroqInterviewAssistant:
             "unknown",
         }:
             coding_language = "unknown"
+
+        explicit_implementation, self_contained = (
+            self._explicit_implementation_request(
+                raw_turn,
+                question,
+            )
+        )
+
+        # Deterministic safety net for clear coding requests. This prevents a
+        # valid implementation request from being lost to an occasional
+        # contextualizer misclassification.
+        if explicit_implementation and interview_type != "behavioral":
+            interview_type = "coding"
+            coding_request = "implementation"
+
+            if action != "ANSWER":
+                action = "ANSWER"
+
+            if self_contained:
+                coding_new_problem = True
+                coding_problem = question or raw_turn.strip()
+
+            if coding_language == "unknown" and re.search(
+                r"\bjava\b",
+                f"{raw_turn} {question}",
+                flags=re.IGNORECASE,
+            ):
+                coding_language = "java"
 
         # Behavioral help is intentionally outside this app's scope.
         if interview_type == "behavioral":
