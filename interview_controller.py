@@ -1,7 +1,8 @@
 """Stage 2 interview orchestration.
 
-Reuses the local audio/transcription pipeline but keeps independent state from
-the Subtitle tab. Only remote/interviewer questions invoke OpenAI.
+Reuses local Faster-Whisper audio capture while keeping completely independent
+state from the Subtitle tab. Groq is called only after an interviewer turn is
+considered complete.
 """
 
 from __future__ import annotations
@@ -17,8 +18,7 @@ from config import (
 )
 from interview_assistant import (
     ConversationTurn,
-    OpenAIInterviewAssistant,
-    looks_like_question,
+    GroqInterviewAssistant,
 )
 from vad_detector import ListenerController
 
@@ -35,7 +35,7 @@ class InterviewController:
         self.language = language if language in {"en", "es"} else "en"
 
         self.listener: ListenerController | None = None
-        self.assistant: OpenAIInterviewAssistant | None = None
+        self.assistant: GroqInterviewAssistant | None = None
         self.running = False
 
         self._turns: deque[ConversationTurn] = deque(
@@ -55,7 +55,7 @@ class InterviewController:
             return
 
         try:
-            self.assistant = OpenAIInterviewAssistant()
+            self.assistant = GroqInterviewAssistant()
         except Exception as exc:
             self._emit("on_status", f"Error: {exc}")
             return
@@ -82,8 +82,11 @@ class InterviewController:
     def stop(self) -> None:
         self.running = False
 
-        timer = self._question_timer
-        self._question_timer = None
+        with self._pending_lock:
+            timer = self._question_timer
+            self._question_timer = None
+            self._pending_interviewer.clear()
+
         if timer is not None:
             timer.cancel()
 
@@ -135,6 +138,12 @@ class InterviewController:
             segment_id,
         )
 
+        # A long interviewer question may be split by the transcription
+        # segmenter. Continuous partials mean the speaker is still talking, so
+        # keep pushing the decision timer forward until speech actually stops.
+        if speaker == "INTERVIEWER":
+            self._extend_question_timer_if_pending()
+
     def _on_final(
         self,
         source: str,
@@ -146,7 +155,9 @@ class InterviewController:
             return
 
         speaker = "YOU" if source == "YOU" else "INTERVIEWER"
-        self._turns.append(ConversationTurn(speaker=speaker, text=cleaned))
+        self._turns.append(
+            ConversationTurn(speaker=speaker, text=cleaned)
+        )
         self._emit(
             "on_transcript_final",
             speaker,
@@ -155,8 +166,15 @@ class InterviewController:
         )
 
         if speaker == "INTERVIEWER":
-            self._last_interviewer_text = cleaned
             self._queue_interviewer_text(cleaned)
+
+    def _new_question_timer(self) -> threading.Timer:
+        timer = threading.Timer(
+            INTERVIEW_QUESTION_DEBOUNCE_SECONDS,
+            self._consume_interviewer_text,
+        )
+        timer.daemon = True
+        return timer
 
     def _queue_interviewer_text(self, text: str) -> None:
         with self._pending_lock:
@@ -165,11 +183,18 @@ class InterviewController:
             if self._question_timer is not None:
                 self._question_timer.cancel()
 
-            self._question_timer = threading.Timer(
-                INTERVIEW_QUESTION_DEBOUNCE_SECONDS,
-                self._consume_interviewer_text,
-            )
-            self._question_timer.daemon = True
+            self._question_timer = self._new_question_timer()
+            self._question_timer.start()
+
+    def _extend_question_timer_if_pending(self) -> None:
+        with self._pending_lock:
+            if not self._pending_interviewer:
+                return
+
+            if self._question_timer is not None:
+                self._question_timer.cancel()
+
+            self._question_timer = self._new_question_timer()
             self._question_timer.start()
 
     def _consume_interviewer_text(self) -> None:
@@ -183,19 +208,13 @@ class InterviewController:
 
         candidate = " ".join(parts).strip()
         self._last_interviewer_text = candidate
-
-        if looks_like_question(candidate):
-            self._start_answer(candidate, force=False)
+        self._start_answer(candidate, force=False)
 
     def _start_answer(self, question: str, force: bool) -> None:
         if not self.running or self.assistant is None:
             return
 
-        if not force and not looks_like_question(question):
-            return
-
         if not self._answer_lock.acquire(blocking=False):
-            # Avoid overlapping model responses during a fast back-and-forth.
             self._emit(
                 "on_assistant_error",
                 "El asistente todavía está generando la respuesta anterior.",
@@ -204,14 +223,12 @@ class InterviewController:
 
         recent_turns = list(self._turns)
         language = self.language
-        self._last_question = question
 
-        self._emit("on_question_detected", question)
-        self._emit("on_answer_started", question)
+        self._emit("on_question_candidate", question)
 
         thread = threading.Thread(
             target=self._answer_worker,
-            args=(question, recent_turns, language),
+            args=(question, recent_turns, language, force),
             name="interview-answer",
             daemon=True,
         )
@@ -222,16 +239,33 @@ class InterviewController:
         question: str,
         recent_turns: list[ConversationTurn],
         language: str,
+        force: bool,
     ) -> None:
         try:
+            assistant = self.assistant
+            if assistant is None or not self.running:
+                return
+
+            if not force:
+                should_answer = assistant.should_answer(
+                    question=question,
+                    recent_turns=recent_turns,
+                )
+                if not should_answer:
+                    self._emit("on_question_ignored", question)
+                    return
+
+            self._last_question = question
+            self._emit("on_question_detected", question)
+            self._emit("on_answer_started", question)
+
             chunks: list[str] = []
 
             def on_delta(delta: str) -> None:
                 chunks.append(delta)
                 self._emit("on_answer_delta", delta)
 
-            assert self.assistant is not None
-            answer = self.assistant.stream_answer(
+            answer = assistant.stream_answer(
                 question=question,
                 recent_turns=recent_turns,
                 language=language,
