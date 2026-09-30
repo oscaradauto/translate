@@ -1379,10 +1379,15 @@ class AssistantTab(QWidget):
             self.controller.set_response_scope(scope)
 
         if self.status_label.text() == "Listening":
-            self.activity_label.setText(
+            listening_text = (
                 "Listening for both speakers"
                 if scope == "both"
                 else "Listening for interviewer"
+            )
+            self.activity_label.setText(
+                f"{listening_text} · Capture hidden"
+                if self._capture_exclusion_active
+                else listening_text
             )
 
         self._refresh_answer_last_button()
