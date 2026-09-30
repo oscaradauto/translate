@@ -11,11 +11,13 @@ Asistente:
 
 from __future__ import annotations
 
+import re
 import sys
 import threading
 import time
 
-from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QSettings, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -23,6 +25,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QKeySequenceEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -195,6 +198,7 @@ class AssistantBridge(QObject):
     answer_completed = pyqtSignal(str)
     assistant_error = pyqtSignal(str)
     service_error = pyqtSignal(str)
+    latency_updated = pyqtSignal(str, float)
     groq_check_completed = pyqtSignal(bool, str)
 
 
@@ -782,6 +786,21 @@ class AssistantTab(QWidget):
 
         self.bridge = AssistantBridge()
         self.controller = None
+        self._settings = QSettings(
+            "MeetingAssistant",
+            "MeetingAssistant",
+        )
+        self._shortcuts: dict[str, QShortcut] = {}
+        self._latencies: dict[str, float | None] = {
+            "stt": None,
+            "analyze": None,
+            "answer": None,
+        }
+        self._health_state = {
+            "mic": "—",
+            "system": "—",
+            "groq": "—",
+        }
         self._starting = False
         self._stopping = False
         self._capture_exclusion_active = False
@@ -808,6 +827,8 @@ class AssistantTab(QWidget):
 
         self._build_ui()
         self._connect_signals()
+        self._load_persisted_settings()
+        self._setup_shortcuts()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
