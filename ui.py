@@ -102,6 +102,8 @@ class AssistantBridge(QObject):
     transcript_partial = pyqtSignal(str, str, int)
     transcript_final = pyqtSignal(str, str, int)
     question_candidate = pyqtSignal(str)
+    turn_understood = pyqtSignal(str, str, str)
+    question_waiting = pyqtSignal(str)
     question_detected = pyqtSignal(str)
     question_ignored = pyqtSignal(str)
     answer_started = pyqtSignal(str)
@@ -859,6 +861,19 @@ class AssistantTab(QWidget):
         answer_header.addWidget(self.answer_state)
         root.addLayout(answer_header)
 
+        self.understood_question = QLabel(
+            "Understood question: —"
+        )
+        self.understood_question.setWordWrap(True)
+        self.understood_question.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.understood_question.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px; "
+            "background: transparent; padding: 0 2px 2px 2px;"
+        )
+        root.addWidget(self.understood_question)
+
         self.answer_view = QTextBrowser()
         self.answer_view.setOpenExternalLinks(False)
         self.answer_view.setMinimumHeight(135)
@@ -921,6 +936,12 @@ class AssistantTab(QWidget):
         self.bridge.question_candidate.connect(
             self._on_question_candidate
         )
+        self.bridge.turn_understood.connect(
+            self._on_turn_understood
+        )
+        self.bridge.question_waiting.connect(
+            self._on_question_waiting
+        )
         self.bridge.question_detected.connect(
             self._on_question_detected
         )
@@ -978,6 +999,18 @@ class AssistantTab(QWidget):
             "on_question_candidate": (
                 lambda text:
                 self.bridge.question_candidate.emit(text)
+            ),
+            "on_turn_understood": (
+                lambda question, topic, language:
+                self.bridge.turn_understood.emit(
+                    question,
+                    topic,
+                    language,
+                )
+            ),
+            "on_question_waiting": (
+                lambda text:
+                self.bridge.question_waiting.emit(text)
             ),
             "on_question_detected": (
                 lambda text:
@@ -1054,6 +1087,7 @@ class AssistantTab(QWidget):
         )
         self.activity_label.setText("Waiting for interview audio")
         self.answer_state.setText("Groq · GPT-OSS 120B")
+        self.understood_question.setText("Understood question: —")
         self.answer_last_button.setEnabled(False)
         self.regenerate_button.setEnabled(False)
         self.copy_answer_button.setEnabled(False)
@@ -1136,6 +1170,28 @@ class AssistantTab(QWidget):
     def _on_question_candidate(self, text: str) -> None:
         self.activity_label.setText(
             "Analyzing interviewer turn..."
+        )
+
+    def _on_turn_understood(
+        self,
+        question: str,
+        topic: str,
+        language: str,
+    ) -> None:
+        details = []
+        if topic:
+            details.append(topic)
+        if language and language != "unknown":
+            details.append(language.upper())
+
+        suffix = f"  ·  {' · '.join(details)}" if details else ""
+        self.understood_question.setText(
+            f"Understood question: {question}{suffix}"
+        )
+
+    def _on_question_waiting(self, text: str) -> None:
+        self.activity_label.setText(
+            "Waiting for the question to finish..."
         )
 
     def _on_question_detected(self, text: str) -> None:
