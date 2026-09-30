@@ -43,6 +43,7 @@ class LocalWhisperTranscriber:
         model_name: str = WHISPER_MODEL,
         language: str | None = "en",
         initial_prompt: str | None = WHISPER_INITIAL_PROMPT,
+        suppress_repetition_loops: bool = False,
     ) -> None:
         self.on_partial = on_partial
         self.on_final = on_final
@@ -51,6 +52,7 @@ class LocalWhisperTranscriber:
         self.model_name = model_name
         self.language = language
         self.initial_prompt = initial_prompt
+        self.suppress_repetition_loops = suppress_repetition_loops
 
         self._model: WhisperModel | None = None
         self._executor: ThreadPoolExecutor | None = None
@@ -217,6 +219,8 @@ class LocalWhisperTranscriber:
     ) -> None:
         try:
             text = future.result().strip()
+            if self.suppress_repetition_loops and text:
+                text = self._collapse_repetition_loops(text)
         except Exception as exc:
             text = ""
             self._report_error(source, exc)
@@ -257,6 +261,8 @@ class LocalWhisperTranscriber:
 
         try:
             text = future.result().strip()
+            if self.suppress_repetition_loops and text:
+                text = self._collapse_repetition_loops(text)
         except Exception as exc:
             text = ""
             self._report_error(source, exc)
@@ -269,6 +275,63 @@ class LocalWhisperTranscriber:
 
         if self._running and text:
             self.on_final(source, text, segment_id)
+
+    @staticmethod
+    def _collapse_repetition_loops(text: str) -> str:
+        """Collapse obvious consecutive Whisper phrase loops.
+
+        This intentionally targets only strong repetition: a block of at
+        least four words repeated at least three times in a row. Normal human
+        repetition such as "no, no" or "very, very" is left untouched.
+        """
+        words = text.split()
+        if len(words) < 12:
+            return text.strip()
+
+        normalized = [
+            re.sub(r"[^a-z0-9']+", "", word.casefold())
+            for word in words
+        ]
+
+        best: tuple[int, int, int] | None = None
+        best_coverage = 0
+        max_block = min(14, len(words) // 3)
+
+        for block_size in range(4, max_block + 1):
+            last_start = len(words) - (block_size * 3)
+            for start in range(last_start + 1):
+                block = normalized[start:start + block_size]
+                if not any(block):
+                    continue
+
+                repeats = 1
+                cursor = start + block_size
+                while (
+                    cursor + block_size <= len(words)
+                    and normalized[cursor:cursor + block_size] == block
+                ):
+                    repeats += 1
+                    cursor += block_size
+
+                if repeats < 3:
+                    continue
+
+                coverage = repeats * block_size
+                if coverage > best_coverage:
+                    best = (start, block_size, repeats)
+                    best_coverage = coverage
+
+        if best is None:
+            return text.strip()
+
+        start, block_size, repeats = best
+        repeated_end = start + (block_size * repeats)
+
+        collapsed = (
+            words[: start + block_size]
+            + words[repeated_end:]
+        )
+        return " ".join(collapsed).strip()
 
     @staticmethod
     def _merge_incremental_text(previous: str, current: str) -> str:
