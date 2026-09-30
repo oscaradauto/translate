@@ -83,13 +83,27 @@ def find_matching_skills(
     if not normalized_question:
         return []
 
+    question_tokens = set(normalized_question.split())
+    padded_question = f" {normalized_question} "
+
+    def contains(phrase: str) -> bool:
+        normalized_phrase = _normalize(phrase)
+        if not normalized_phrase:
+            return False
+
+        phrase_tokens = normalized_phrase.split()
+        if len(phrase_tokens) == 1:
+            return phrase_tokens[0] in question_tokens
+
+        return f" {normalized_phrase} " in padded_question
+
     _, skills = _load_document()
     scored: list[tuple[int, int, dict[str, Any]]] = []
 
     for index, skill in enumerate(skills):
         score = 0
-        topic = _normalize(skill.get("topic", ""))
-        if topic and topic in normalized_question:
+        topic = str(skill.get("topic", ""))
+        if topic and contains(topic):
             score += 8
 
         keywords = skill.get("keywords", [])
@@ -100,7 +114,7 @@ def find_matching_skills(
             normalized_keyword = _normalize(keyword)
             if not normalized_keyword:
                 continue
-            if normalized_keyword in normalized_question:
+            if contains(normalized_keyword):
                 # Longer phrases are more specific than one-word matches.
                 score += 2 + min(5, len(normalized_keyword.split()))
 
