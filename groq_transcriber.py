@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import os
 import threading
+import time
 import wave
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Callable
@@ -94,15 +95,17 @@ class GroqSpeechTranscriber:
         if not self._running or executor is None or not pcm16:
             return False
 
+        started_at = time.perf_counter()
         future = executor.submit(self._transcribe, pcm16)
         with self._lock:
             self._futures.add(future)
 
         future.add_done_callback(
-            lambda f: self._finish_final(
+            lambda f, started=started_at: self._finish_final(
                 source,
                 segment_id,
                 f,
+                started,
             )
         )
         return True
@@ -155,6 +158,7 @@ class GroqSpeechTranscriber:
         source: str,
         segment_id: int,
         future: Future,
+        started_at: float,
     ) -> None:
         with self._lock:
             self._futures.discard(future)
@@ -168,6 +172,12 @@ class GroqSpeechTranscriber:
             if self.on_error:
                 self.on_error(source, exc)
             return
+
+        latency_ms = (time.perf_counter() - started_at) * 1000.0
+        if self.on_status:
+            self.on_status(
+                f"__STAGE2_LATENCY__:stt:{latency_ms:.1f}"
+            )
 
         if text:
             self.on_final(source, text, segment_id)

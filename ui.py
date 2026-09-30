@@ -11,11 +11,13 @@ Asistente:
 
 from __future__ import annotations
 
+import re
 import sys
 import threading
 import time
 
-from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QSettings, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -23,6 +25,8 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QKeySequenceEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QTabWidget,
@@ -45,6 +49,86 @@ GREEN = "#5cb85c"
 ORANGE = "#ffa64d"
 WARNING = "#f0ad4e"
 RED = "#d9534f"
+
+
+WDA_NONE = 0x00000000
+WDA_EXCLUDEFROMCAPTURE = 0x00000011
+
+
+def _set_window_capture_exclusion(
+    window: QWidget,
+    enabled: bool,
+) -> tuple[bool, str]:
+    """Exclude the top-level app window from compatible Windows capture."""
+    if sys.platform != "win32":
+        return (
+            False,
+            "La protección de captura solo está disponible en Windows.",
+        )
+
+    try:
+        import ctypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+        user32.SetWindowDisplayAffinity.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint,
+        ]
+        user32.SetWindowDisplayAffinity.restype = ctypes.c_bool
+
+        user32.GetWindowDisplayAffinity.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_uint),
+        ]
+        user32.GetWindowDisplayAffinity.restype = ctypes.c_bool
+
+        hwnd = ctypes.c_void_p(int(window.winId()))
+        affinity = (
+            WDA_EXCLUDEFROMCAPTURE
+            if enabled
+            else WDA_NONE
+        )
+
+        ctypes.set_last_error(0)
+        if not user32.SetWindowDisplayAffinity(hwnd, affinity):
+            error_code = ctypes.get_last_error()
+            return (
+                False,
+                "Windows no pudo cambiar la protección de captura "
+                f"(WinError {error_code}).",
+            )
+
+        current = ctypes.c_uint()
+        ctypes.set_last_error(0)
+        if not user32.GetWindowDisplayAffinity(
+            hwnd,
+            ctypes.byref(current),
+        ):
+            error_code = ctypes.get_last_error()
+            return (
+                False,
+                "Windows aplicó la solicitud pero no pudo verificarla "
+                f"(WinError {error_code}).",
+            )
+
+        if current.value != affinity:
+            return (
+                False,
+                "Windows no confirmó el modo de protección solicitado "
+                f"(esperado 0x{affinity:08X}, actual 0x{current.value:08X}).",
+            )
+
+        return (
+            True,
+            (
+                "Ventana excluida de capturas compatibles."
+                if enabled
+                else "Protección de captura desactivada."
+            ),
+        )
+    except Exception as exc:
+        return False, f"No se pudo configurar la protección de captura: {exc}"
 
 
 def _now() -> str:
@@ -108,9 +192,14 @@ class AssistantBridge(QObject):
     question_detected = pyqtSignal(str)
     question_ignored = pyqtSignal(str)
     answer_started = pyqtSignal(str)
+    answer_queued = pyqtSignal(str)
+    answer_retrying = pyqtSignal()
     answer_delta = pyqtSignal(str)
     answer_completed = pyqtSignal(str)
     assistant_error = pyqtSignal(str)
+    service_error = pyqtSignal(str)
+    latency_updated = pyqtSignal(str, float)
+    groq_check_completed = pyqtSignal(bool, str)
 
 
 class CaptionCard(QFrame):
@@ -606,7 +695,15 @@ class SubtitleTab(QWidget):
         dialog.exec()
 
     def _on_status_changed(self, text: str) -> None:
-        loading = text.startswith("Cargando")
+        if text.startswith("Groq STT listo"):
+            self._set_health(groq="✓")
+            self.status_label.setText("Loading")
+            return
+
+        loading = (
+            text.startswith("Cargando")
+            or text.startswith("Preparando")
+        )
         listening = text.startswith("Escuchando")
         stopped = text == "Detenido"
         error = text.startswith("Error")
@@ -697,19 +794,49 @@ class AssistantTab(QWidget):
 
         self.bridge = AssistantBridge()
         self.controller = None
+        self._settings = QSettings(
+            "MeetingAssistant",
+            "MeetingAssistant",
+        )
+        self._shortcuts: dict[str, QShortcut] = {}
+        self._latencies: dict[str, float | None] = {
+            "stt": None,
+            "analyze": None,
+            "answer": None,
+        }
+        self._health_state = {
+            "mic": "—",
+            "system": "—",
+            "groq": "—",
+        }
         self._starting = False
         self._stopping = False
+        self._capture_exclusion_active = False
+        self._capture_exclusion_message = ""
+        self._capture_state = "idle"
 
         self._transcript_entries: dict[tuple[str, int], dict] = {}
         self._transcript_order: list[tuple[str, int]] = []
         self._max_transcript_entries = 30
         self._answer_buffer = ""
+        self._pending_answer_buffer = ""
+        self._answer_stream_started = False
+        self._current_answer_is_coding = False
+        self._dynamic_base_window_height: int | None = None
+        self._dynamic_base_answer_height: int | None = None
+        self._dynamic_base_transcript_height: int | None = None
         self._understood_question_text = ""
+        self._pending_understood_question = ""
+        self._pending_understood_topic = ""
+        self._pending_understood_language = ""
+        self._conversation_history: dict[tuple[str, int], dict] = {}
         self._has_any_turn = False
         self._has_interviewer_turn = False
 
         self._build_ui()
         self._connect_signals()
+        self._load_persisted_settings()
+        self._setup_shortcuts()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -738,6 +865,65 @@ class AssistantTab(QWidget):
         self.status_label = QLabel("Ready")
         self.status_label.setStyleSheet(
             f"color: {MUTED}; font-size: 11px; background: transparent;"
+        )
+
+        self.health_label = QLabel("🎤 —   🔊 —   Groq —")
+        self.health_label.setStyleSheet(
+            f"color: {MUTED_DARK}; font-size: 10px; background: transparent;"
+        )
+        self.health_label.setToolTip(
+            "Estado de micrófono, audio del sistema y servicios Groq."
+        )
+
+        self.latency_label = QLabel(
+            "STT —   Analyze —   Answer —"
+        )
+        self.latency_label.setStyleSheet(
+            f"color: {MUTED_DARK}; font-size: 10px; background: transparent;"
+        )
+        self.latency_label.setToolTip(
+            "Latencia de la última transcripción, análisis y respuesta."
+        )
+
+        capture_mode_label = QLabel("Capture:")
+        capture_mode_label.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px; background: transparent;"
+        )
+
+        self.capture_mode_combo = QComboBox()
+        self.capture_mode_combo.addItem("Hidden", "hidden")
+        self.capture_mode_combo.addItem("Visible", "visible")
+        self.capture_mode_combo.setMinimumWidth(88)
+        self.capture_mode_combo.setToolTip(
+            "Hidden: intenta excluir toda la ventana de capturas compatibles. "
+            "Visible: permite que la ventana aparezca normalmente."
+        )
+        self.capture_mode_combo.setStyleSheet(
+            f"""
+            QComboBox {{
+                background-color: rgba(255,255,255,15);
+                color: {TEXT};
+                border: 1px solid rgba(255,255,255,25);
+                border-radius: 8px;
+                padding: 5px 9px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {CARD_BG_SOFT};
+                color: {TEXT};
+                selection-background-color: {BLUE};
+            }}
+            """
+        )
+        self.capture_mode_combo.currentIndexChanged.connect(
+            self._on_capture_mode_changed
+        )
+
+        self.capture_status_label = QLabel("Ready to hide")
+        self.capture_status_label.setStyleSheet(
+            f"color: {MUTED_DARK}; font-size: 10px; background: transparent;"
+        )
+        self.capture_status_label.setToolTip(
+            "Hidden está seleccionado y se aplicará al iniciar Stage 2."
         )
 
         input_label = QLabel("Input: Auto")
@@ -825,15 +1011,11 @@ class AssistantTab(QWidget):
         header.addSpacing(4)
         header.addWidget(self.status_dot)
         header.addWidget(self.status_label)
+        header.addSpacing(10)
+        header.addWidget(self.health_label)
+        header.addSpacing(10)
+        header.addWidget(self.latency_label)
         header.addStretch()
-        header.addWidget(input_label)
-        header.addSpacing(6)
-        header.addWidget(response_scope_label)
-        header.addWidget(self.response_scope_combo)
-        header.addSpacing(6)
-        header.addWidget(language_label)
-        header.addWidget(self.language_combo)
-        header.addSpacing(6)
         header.addWidget(self.interview_button)
 
         root.addLayout(header)
@@ -860,8 +1042,30 @@ class AssistantTab(QWidget):
             f"color: {MUTED}; font-size: 10px; background: transparent;"
         )
 
+        self.verify_groq_button = QPushButton(
+            "✓ Verificar Groq"
+        )
+        self.verify_groq_button.setStyleSheet(_button_style())
+        self.verify_groq_button.setToolTip(
+            "Prueba Whisper y GPT con llamadas mínimas antes de la entrevista."
+        )
+        self.verify_groq_button.clicked.connect(
+            self._verify_groq
+        )
+
+        self.copy_conversation_button = QPushButton(
+            "📋 Copiar conversación"
+        )
+        self.copy_conversation_button.setStyleSheet(_button_style())
+        self.copy_conversation_button.setEnabled(False)
+        self.copy_conversation_button.clicked.connect(
+            self._copy_conversation
+        )
+
         conversation_header.addWidget(conversation_title)
         conversation_header.addStretch()
+        conversation_header.addWidget(self.copy_conversation_button)
+        conversation_header.addSpacing(10)
         conversation_header.addWidget(self.activity_label)
 
         root.addLayout(conversation_header)
@@ -962,19 +1166,115 @@ class AssistantTab(QWidget):
         self.copy_answer_button.setEnabled(False)
         self.copy_answer_button.clicked.connect(self._copy_answer)
 
+        self.copy_code_button = QPushButton("📋 Copiar código")
+        self.copy_code_button.setStyleSheet(_button_style())
+        self.copy_code_button.setEnabled(False)
+        self.copy_code_button.setVisible(False)
+        self.copy_code_button.clicked.connect(self._copy_code)
+
         actions.addWidget(self.answer_last_button)
         actions.addWidget(self.regenerate_button)
         actions.addWidget(self.copy_question_button)
         actions.addWidget(self.copy_answer_button)
+        actions.addWidget(self.copy_code_button)
         actions.addStretch()
 
-        engine = QLabel("🎤 Groq Whisper Large V3   ⚡ Groq GPT-OSS 120B")
-        engine.setStyleSheet(
-            f"color: {MUTED}; font-size: 10px; background: transparent;"
-        )
-        actions.addWidget(engine)
-
         root.addLayout(actions)
+
+    @staticmethod
+    def _select_combo_data(combo: QComboBox, value: str) -> None:
+        for index in range(combo.count()):
+            if str(combo.itemData(index)) == value:
+                combo.setCurrentIndex(index)
+                return
+
+    def _load_persisted_settings(self) -> None:
+        response_scope = str(
+            self._settings.value(
+                "stage2/response_scope",
+                "interviewer",
+            )
+        )
+        answer_language = str(
+            self._settings.value(
+                "stage2/answer_language",
+                "en",
+            )
+        )
+        capture_mode = str(
+            self._settings.value(
+                "stage2/capture_mode",
+                "hidden",
+            )
+        )
+
+        self._select_combo_data(
+            self.response_scope_combo,
+            response_scope,
+        )
+        self._select_combo_data(
+            self.language_combo,
+            answer_language,
+        )
+        self._select_combo_data(
+            self.capture_mode_combo,
+            capture_mode,
+        )
+        self._set_capture_status("idle")
+
+    def _persist_setting(self, key: str, value: str) -> None:
+        self._settings.setValue(f"stage2/{key}", value)
+        self._settings.sync()
+
+    def _setup_shortcuts(self) -> None:
+        definitions = {
+            "answer_last": ("F8", self._answer_last),
+            "regenerate": ("F9", self._regenerate),
+            "copy_answer": ("Ctrl+Shift+C", self._copy_answer),
+            "copy_code": ("Ctrl+Alt+C", self._copy_code),
+        }
+
+        for name, (default, handler) in definitions.items():
+            stored = str(
+                self._settings.value(
+                    f"stage2/shortcut_{name}",
+                    default,
+                )
+            )
+            shortcut = QShortcut(
+                QKeySequence(stored),
+                self,
+            )
+            shortcut.setContext(
+                Qt.ShortcutContext.WidgetWithChildrenShortcut
+            )
+            shortcut.activated.connect(handler)
+            self._shortcuts[name] = shortcut
+
+    def shortcut_sequence(self, name: str) -> QKeySequence:
+        shortcut = self._shortcuts.get(name)
+        if shortcut is None:
+            return QKeySequence()
+        return shortcut.key()
+
+    def set_shortcut_sequence(
+        self,
+        name: str,
+        sequence: QKeySequence,
+    ) -> None:
+        shortcut = self._shortcuts.get(name)
+        if shortcut is None:
+            return
+
+        shortcut.setKey(sequence)
+        portable = sequence.toString(
+            QKeySequence.SequenceFormat.PortableText
+        )
+        self._settings.setValue(
+            f"stage2/shortcut_{name}",
+            portable,
+        )
+        self._settings.sync()
 
     def _connect_signals(self) -> None:
         self.bridge.status_changed.connect(self._on_status_changed)
@@ -1005,12 +1305,27 @@ class AssistantTab(QWidget):
         self.bridge.answer_started.connect(
             self._on_answer_started
         )
+        self.bridge.answer_queued.connect(
+            self._on_answer_queued
+        )
+        self.bridge.answer_retrying.connect(
+            self._on_answer_retrying
+        )
         self.bridge.answer_delta.connect(self._on_answer_delta)
         self.bridge.answer_completed.connect(
             self._on_answer_completed
         )
         self.bridge.assistant_error.connect(
             self._on_assistant_error
+        )
+        self.bridge.service_error.connect(
+            self._on_service_error
+        )
+        self.bridge.latency_updated.connect(
+            self._on_latency_updated
+        )
+        self.bridge.groq_check_completed.connect(
+            self._on_groq_check_completed
         )
 
     def _toggle_session(self) -> None:
@@ -1022,11 +1337,215 @@ class AssistantTab(QWidget):
         else:
             self._stop_session()
 
+    def _capture_mode(self) -> str:
+        return self.capture_mode_combo.currentData() or "hidden"
+
+    def _set_capture_status(
+        self,
+        state: str,
+        message: str = "",
+    ) -> None:
+        self._capture_exclusion_message = message
+        self._capture_state = state
+
+        if state == "hidden":
+            self._capture_exclusion_active = True
+            self.capture_status_label.setText("🔒 Hidden")
+            self.capture_status_label.setStyleSheet(
+                f"color: {GREEN}; font-size: 10px; "
+                "font-weight: 700; background: transparent;"
+            )
+            self.capture_status_label.setToolTip(
+                message
+                or "Windows confirmó la exclusión de capturas compatibles."
+            )
+            return
+
+        if state == "hidden_failed":
+            self._capture_exclusion_active = False
+            self.capture_status_label.setText("⚠ Visible")
+            self.capture_status_label.setStyleSheet(
+                f"color: {WARNING}; font-size: 10px; "
+                "font-weight: 700; background: transparent;"
+            )
+            self.capture_status_label.setToolTip(
+                "Hidden fue solicitado, pero Windows no pudo confirmarlo. "
+                "Stage 2 sigue funcionando. " + message
+            )
+            return
+
+        if state == "visible":
+            self._capture_exclusion_active = False
+            self.capture_status_label.setText("👁 Visible")
+            self.capture_status_label.setStyleSheet(
+                f"color: {MUTED}; font-size: 10px; "
+                "font-weight: 700; background: transparent;"
+            )
+            self.capture_status_label.setToolTip(
+                message
+                or "La ventana puede aparecer normalmente en capturas."
+            )
+            return
+
+        if state == "visible_failed":
+            # Preserve the previous effective flag: if WDA_NONE failed after
+            # Hidden had been active, the window may still be excluded.
+            self.capture_status_label.setText("⚠ Capture unknown")
+            self.capture_status_label.setStyleSheet(
+                f"color: {WARNING}; font-size: 10px; "
+                "font-weight: 700; background: transparent;"
+            )
+            self.capture_status_label.setToolTip(
+                "Visible fue solicitado, pero Windows no pudo confirmar "
+                "WDA_NONE. " + message
+            )
+            return
+
+        # Idle: show what will happen when Stage 2 starts.
+        self._capture_exclusion_active = False
+        if self._capture_mode() == "hidden":
+            self.capture_status_label.setText("Ready to hide")
+            self.capture_status_label.setToolTip(
+                "Hidden está seleccionado y se aplicará al iniciar Stage 2."
+            )
+        else:
+            self.capture_status_label.setText("Ready visible")
+            self.capture_status_label.setToolTip(
+                "Visible está seleccionado; Stage 2 no ocultará la ventana."
+            )
+        self.capture_status_label.setStyleSheet(
+            f"color: {MUTED_DARK}; font-size: 10px; "
+            "background: transparent;"
+        )
+
+    def _enable_capture_exclusion(self) -> bool:
+        if (
+            self._capture_exclusion_active
+            and self._capture_state == "hidden"
+        ):
+            return True
+
+        # Re-apply and verify when the previous effective state is uncertain.
+        ok, message = _set_window_capture_exclusion(
+            self.window(),
+            True,
+        )
+        if ok:
+            self._set_capture_status("hidden", message)
+            print("[Privacy] Stage 2 capture exclusion enabled.")
+            return True
+
+        self._set_capture_status("hidden_failed", message)
+        print(f"[Privacy] Capture exclusion unavailable: {message}")
+        return False
+
+    def _show_in_capture(self) -> bool:
+        # Always request WDA_NONE, even if the app did not previously confirm
+        # Hidden. This makes an explicit Visible selection authoritative.
+        ok, message = _set_window_capture_exclusion(
+            self.window(),
+            False,
+        )
+        if ok:
+            self._set_capture_status("visible", message)
+            print("[Privacy] Stage 2 capture exclusion disabled.")
+            return True
+
+        self._set_capture_status("visible_failed", message)
+        print(f"[Privacy] Could not confirm visible capture mode: {message}")
+        return False
+
+    def _disable_capture_exclusion(self) -> None:
+        # Used when Stage 2 stops/closes. Restore normal Windows capture.
+        if self._capture_exclusion_active:
+            ok, message = _set_window_capture_exclusion(
+                self.window(),
+                False,
+            )
+            if ok:
+                print("[Privacy] Stage 2 capture exclusion disabled.")
+            else:
+                print(
+                    f"[Privacy] Could not disable capture exclusion: {message}"
+                )
+                self._set_capture_status("visible_failed", message)
+                return
+
+        self._capture_exclusion_active = False
+        self._capture_exclusion_message = ""
+        self._set_capture_status("idle")
+
+    def _on_capture_mode_changed(self, _index: int = -1) -> None:
+        mode = self._capture_mode()
+        self._persist_setting("capture_mode", mode)
+        session_active = (
+            self.controller is not None
+            or self._starting
+            or self._stopping
+        )
+
+        if not session_active:
+            self._set_capture_status("idle")
+            return
+
+        if mode == "hidden":
+            hidden = self._enable_capture_exclusion()
+            self.activity_label.setText(
+                "Capture hidden"
+                if hidden
+                else "⚠ Capture visible · Hidden could not be confirmed"
+            )
+            self.activity_label.setToolTip(
+                self._capture_exclusion_message
+            )
+        else:
+            visible = self._show_in_capture()
+            self.activity_label.setText(
+                "Capture visible"
+                if visible
+                else "⚠ Capture state unknown"
+            )
+            self.activity_label.setToolTip(
+                self._capture_exclusion_message
+            )
+
     def _start_session(self) -> None:
         self._starting = True
+
+        # Capture mode is user-configurable and can also be changed while
+        # Stage 2 is running. Hidden remains the default.
+        requested_capture_mode = self._capture_mode()
+        capture_hidden = False
+        capture_visible = True
+
+        if requested_capture_mode == "hidden":
+            capture_hidden = self._enable_capture_exclusion()
+        else:
+            capture_visible = self._show_in_capture()
+
         self._clear_session_ui()
+        if (
+            requested_capture_mode == "hidden"
+            and not capture_hidden
+        ):
+            self.activity_label.setText(
+                "⚠ Capture visible · Stage 2 will continue normally"
+            )
+            self.activity_label.setToolTip(
+                self._capture_exclusion_message
+            )
+        elif requested_capture_mode == "visible":
+            self.activity_label.setText(
+                "Capture visible · user selected"
+                if capture_visible
+                else "⚠ Capture state unknown"
+            )
+            self.activity_label.setToolTip(
+                self._capture_exclusion_message
+            )
 
         self.interview_button.setEnabled(False)
+        self.verify_groq_button.setEnabled(False)
         self.interview_button.setText("⏳ Cargando...")
         self._on_status_changed("Preparando audio...")
 
@@ -1085,6 +1604,14 @@ class AssistantTab(QWidget):
                 lambda text:
                 self.bridge.answer_started.emit(text)
             ),
+            "on_answer_queued": (
+                lambda text:
+                self.bridge.answer_queued.emit(text)
+            ),
+            "on_answer_retrying": (
+                lambda:
+                self.bridge.answer_retrying.emit()
+            ),
             "on_answer_delta": (
                 lambda text:
                 self.bridge.answer_delta.emit(text)
@@ -1096,6 +1623,14 @@ class AssistantTab(QWidget):
             "on_assistant_error": (
                 lambda text:
                 self.bridge.assistant_error.emit(text)
+            ),
+            "on_service_error": (
+                lambda text:
+                self.bridge.service_error.emit(text)
+            ),
+            "on_latency": (
+                lambda stage, ms:
+                self.bridge.latency_updated.emit(stage, ms)
             ),
         }
 
@@ -1143,10 +1678,26 @@ class AssistantTab(QWidget):
     def _clear_session_ui(self) -> None:
         self._transcript_entries.clear()
         self._transcript_order.clear()
+        self._conversation_history.clear()
         self._answer_buffer = ""
+        self._pending_answer_buffer = ""
+        self._answer_stream_started = False
+        self._current_answer_is_coding = False
+        self._reset_answer_panel_layout()
         self._understood_question_text = ""
+        self._pending_understood_question = ""
+        self._pending_understood_topic = ""
+        self._pending_understood_language = ""
         self._has_any_turn = False
         self._has_interviewer_turn = False
+        self._latencies = {
+            "stt": None,
+            "analyze": None,
+            "answer": None,
+        }
+        self._refresh_latency_label()
+        self.copy_code_button.setEnabled(False)
+        self.copy_code_button.setVisible(False)
 
         self.transcript_view.setPlainText(
             "Listening for YOU and INTERVIEWER..."
@@ -1159,31 +1710,45 @@ class AssistantTab(QWidget):
         self.understood_question.setText("Understood question: —")
         self.answer_last_button.setEnabled(False)
         self.regenerate_button.setEnabled(False)
+        self.copy_conversation_button.setEnabled(False)
         self.copy_question_button.setEnabled(False)
         self.copy_answer_button.setEnabled(False)
 
     def _on_language_changed(self, _index: int = -1) -> None:
-        controller = self.controller
-        if controller is None:
-            return
-
         language = self.language_combo.currentData() or "en"
-        controller.set_language(language)
+        self._persist_setting("answer_language", language)
+
+        controller = self.controller
+        if controller is not None:
+            controller.set_language(language)
 
     def _on_response_scope_changed(self, _index: int = -1) -> None:
         scope = (
             self.response_scope_combo.currentData()
             or "interviewer"
         )
+        self._persist_setting("response_scope", scope)
 
         if self.controller is not None:
             self.controller.set_response_scope(scope)
 
         if self.status_label.text() == "Listening":
-            self.activity_label.setText(
+            listening_text = (
                 "Listening for both speakers"
                 if scope == "both"
                 else "Listening for interviewer"
+            )
+            if self._capture_state == "hidden":
+                capture_suffix = "Capture hidden"
+            elif self._capture_state == "visible":
+                capture_suffix = "Capture visible"
+            elif self._capture_state == "visible_failed":
+                capture_suffix = "⚠ Capture unknown"
+            else:
+                capture_suffix = "⚠ Capture visible"
+
+            self.activity_label.setText(
+                f"{listening_text} · {capture_suffix}"
             )
 
         self._refresh_answer_last_button()
@@ -1263,6 +1828,22 @@ class AssistantTab(QWidget):
             partial=False,
         )
 
+        key = (speaker, segment_id)
+        existing = self._conversation_history.get(key)
+        timestamp = (
+            existing["timestamp"]
+            if existing is not None
+            else _now()
+        )
+        self._conversation_history[key] = {
+            "timestamp": timestamp,
+            "speaker": speaker,
+            "text": text,
+        }
+        self.copy_conversation_button.setEnabled(
+            bool(self._conversation_history)
+        )
+
         self._has_any_turn = True
         if speaker == "INTERVIEWER":
             self._has_interviewer_turn = True
@@ -1279,19 +1860,11 @@ class AssistantTab(QWidget):
         )
 
     def _on_question_candidate(self, text: str) -> None:
-        # A new interviewer turn is being analyzed. Clear the previous
-        # suggestion immediately so an answer to the old question is never
-        # mistaken for the current one.
-        self._answer_buffer = ""
-        self._understood_question_text = ""
-        self.answer_view.setPlainText("Analyzing question...")
-        self.answer_state.setText("Analyzing...")
-        self.understood_question.setText(
-            "Understood question: analyzing..."
-        )
-        self.regenerate_button.setEnabled(False)
-        self.copy_question_button.setEnabled(False)
-        self.copy_answer_button.setEnabled(False)
+        # Keep the last confirmed answer visible while this turn is only a
+        # candidate. It may still become WAIT or IGNORE.
+        self._pending_understood_question = ""
+        self._pending_understood_topic = ""
+        self._pending_understood_language = ""
         self.activity_label.setText(
             "Analyzing question..."
         )
@@ -1302,6 +1875,226 @@ class AssistantTab(QWidget):
         topic: str,
         language: str,
     ) -> None:
+        # The contextualizer runs before WAIT / IGNORE / ANSWER is known.
+        # Keep this result pending so non-technical turns do not replace the
+        # last confirmed technical question in the UI.
+        self._pending_understood_question = question.strip()
+        self._pending_understood_topic = topic.strip()
+        self._pending_understood_language = language.strip()
+
+    def _on_question_waiting(self, text: str) -> None:
+        self._pending_understood_question = ""
+        self._pending_understood_topic = ""
+        self._pending_understood_language = ""
+        self.activity_label.setText(
+            "Waiting for the question to finish..."
+        )
+
+    def _set_answer_view_mode(self, coding: bool) -> None:
+        font_rule = (
+            'font-family: "Cascadia Mono", "Consolas", monospace; '
+            "font-size: 13px;"
+            if coding
+            else "font-size: 14px;"
+        )
+        self.answer_view.setStyleSheet(
+            f"""
+            QTextBrowser {{
+                background-color: {CARD_BG_SOFT};
+                color: {TEXT};
+                border: 1px solid rgba(77,166,255,45);
+                border-radius: 12px;
+                padding: 12px;
+                {font_rule}
+            }}
+            """
+        )
+
+    def _capture_dynamic_layout_baseline(self) -> None:
+        if self._dynamic_base_window_height is not None:
+            return
+
+        window = self.window()
+        self._dynamic_base_window_height = window.height()
+        self._dynamic_base_answer_height = max(
+            135,
+            self.answer_view.height(),
+        )
+        self._dynamic_base_transcript_height = max(
+            155,
+            self.transcript_view.height(),
+        )
+
+    def _keep_window_on_current_screen(self) -> None:
+        window = self.window()
+        screen = QApplication.screenAt(
+            window.frameGeometry().center()
+        )
+        if screen is None:
+            screen = window.screen()
+        if screen is None:
+            return
+
+        available = screen.availableGeometry()
+        frame = window.frameGeometry()
+
+        new_x = window.x()
+        new_y = window.y()
+
+        if frame.right() > available.right():
+            new_x = max(
+                available.left(),
+                available.right() - window.width() + 1,
+            )
+        if frame.bottom() > available.bottom():
+            new_y = max(
+                available.top(),
+                available.bottom() - window.height() + 1,
+            )
+        if frame.left() < available.left():
+            new_x = available.left()
+        if frame.top() < available.top():
+            new_y = available.top()
+
+        if new_x != window.x() or new_y != window.y():
+            window.move(new_x, new_y)
+
+    def _reset_answer_panel_layout(self) -> None:
+        self._set_answer_view_mode(False)
+        self.transcript_view.setMinimumHeight(155)
+        self.transcript_view.setMaximumHeight(16777215)
+        self.answer_view.setMinimumHeight(135)
+        self.answer_view.setMaximumHeight(16777215)
+
+        base_height = self._dynamic_base_window_height
+        if base_height is not None:
+            window = self.window()
+            target_height = max(
+                window.minimumHeight(),
+                base_height,
+            )
+            if window.height() != target_height:
+                window.resize(
+                    window.width(),
+                    target_height,
+                )
+            self._keep_window_on_current_screen()
+
+        self._dynamic_base_window_height = None
+        self._dynamic_base_answer_height = None
+        self._dynamic_base_transcript_height = None
+
+    def _prepare_coding_layout(self) -> None:
+        self._set_answer_view_mode(True)
+        # Snapshot the normal layout once, then let every coding answer size
+        # itself relative to that same baseline until we return to Technical.
+        self._capture_dynamic_layout_baseline()
+
+        self.transcript_view.setMinimumHeight(105)
+        self.transcript_view.setMaximumHeight(165)
+        self.answer_view.setMinimumHeight(210)
+
+    def _fit_coding_answer_to_content(self) -> None:
+        if not self._current_answer_is_coding:
+            self._reset_answer_panel_layout()
+            return
+
+        self._prepare_coding_layout()
+
+        document = self.answer_view.document()
+        document.adjustSize()
+        content_height = int(document.size().height()) + 34
+
+        window = self.window()
+        screen = QApplication.screenAt(
+            window.frameGeometry().center()
+        )
+        if screen is None:
+            screen = window.screen()
+
+        if screen is not None:
+            available = screen.availableGeometry()
+            max_answer_height = max(
+                260,
+                min(560, int(available.height() * 0.58)),
+            )
+            max_window_height = max(
+                window.minimumHeight(),
+                available.height() - 24,
+            )
+        else:
+            max_answer_height = 520
+            max_window_height = 900
+
+        target_answer_height = max(
+            210,
+            min(content_height, max_answer_height),
+        )
+        self.answer_view.setMinimumHeight(target_answer_height)
+        self.answer_view.setMaximumHeight(target_answer_height)
+
+        base_window_height = (
+            self._dynamic_base_window_height
+            or window.height()
+        )
+        base_answer_height = (
+            self._dynamic_base_answer_height
+            or 135
+        )
+        base_transcript_height = (
+            self._dynamic_base_transcript_height
+            or 155
+        )
+
+        # Shrinking Conversation to 165px gives some of its previous space to
+        # the code panel before the top-level window needs to grow.
+        transcript_space_freed = max(
+            0,
+            base_transcript_height - 165,
+        )
+        answer_capacity_at_base_size = (
+            base_answer_height + transcript_space_freed
+        )
+
+        extra_height_needed = max(
+            0,
+            target_answer_height - answer_capacity_at_base_size,
+        )
+        target_window_height = min(
+            max_window_height,
+            base_window_height + extra_height_needed,
+        )
+        target_window_height = max(
+            window.minimumHeight(),
+            target_window_height,
+        )
+
+        # Resize in both directions. This is what makes consecutive coding
+        # answers dynamic: a large solution can grow the window, while the
+        # next short solution shrinks it again to the baseline.
+        if window.height() != target_window_height:
+            window.resize(
+                window.width(),
+                target_window_height,
+            )
+
+        self._keep_window_on_current_screen()
+
+    def _on_answer_queued(self, _text: str) -> None:
+        # Keep the current answer visible while the newest question waits for
+        # the active stream to finish.
+        self.activity_label.setText(
+            "Next question queued · finishing current answer..."
+        )
+
+    def _on_question_detected(self, text: str) -> None:
+        question = (
+            self._pending_understood_question
+            or text.strip()
+        )
+        topic = self._pending_understood_topic
+        language = self._pending_understood_language
+
         details = []
         if topic:
             details.append(topic)
@@ -1309,69 +2102,266 @@ class AssistantTab(QWidget):
             details.append(language.upper())
 
         suffix = f"  ·  {' · '.join(details)}" if details else ""
-        self._understood_question_text = question.strip()
+        self._understood_question_text = question
         self.understood_question.setText(
             f"Understood question: {question}{suffix}"
         )
-        self.copy_question_button.setEnabled(
-            bool(self._understood_question_text)
-        )
+        self.copy_question_button.setEnabled(bool(question))
 
-    def _on_question_waiting(self, text: str) -> None:
-        self._answer_buffer = ""
-        self.answer_view.setPlainText(
-            "Waiting for the speaker to finish the question..."
-        )
-        self.answer_state.setText("Waiting")
-        self.regenerate_button.setEnabled(False)
-        self.copy_answer_button.setEnabled(False)
-        self.activity_label.setText(
-            "Waiting for the question to finish..."
-        )
+        is_coding = topic.startswith("Coding")
+        self._current_answer_is_coding = is_coding
+        if is_coding:
+            self._prepare_coding_layout()
+        else:
+            self._reset_answer_panel_layout()
 
-    def _on_question_detected(self, text: str) -> None:
+        self._pending_understood_question = ""
+        self._pending_understood_topic = ""
+        self._pending_understood_language = ""
+
         self.activity_label.setText(
-            "Technical question detected"
+            "Coding question detected"
+            if is_coding
+            else "Technical question detected"
         )
 
     def _on_question_ignored(self, text: str) -> None:
-        self._answer_buffer = ""
-        self.answer_view.setPlainText(
-            "No technical answer needed. Waiting for the next question..."
-        )
-        self.answer_state.setText("Waiting")
-        self.regenerate_button.setEnabled(False)
-        self.copy_answer_button.setEnabled(False)
+        ignored_topic = self._pending_understood_topic
+        self._pending_understood_question = ""
+        self._pending_understood_topic = ""
+        self._pending_understood_language = ""
         self.activity_label.setText(
-            "Non-technical turn ignored"
+            "Behavioral turn ignored"
+            if ignored_topic.startswith("Behavioral")
+            else "Non-technical turn ignored"
         )
 
     def _on_answer_started(self, question: str) -> None:
-        self._answer_buffer = ""
-        self.answer_view.clear()
+        # Keep the previous confirmed answer visible until the new generation
+        # produces actual text. This prevents an empty/error response from
+        # leaving the interviewee with a blank panel.
+        self._pending_answer_buffer = ""
+        self._answer_stream_started = False
         self.answer_state.setText("Generating...")
         self.regenerate_button.setEnabled(False)
-        self.copy_answer_button.setEnabled(False)
+        self.copy_answer_button.setEnabled(bool(self._answer_buffer))
+
+    def _on_answer_retrying(self) -> None:
+        self._pending_answer_buffer = ""
+        self._answer_stream_started = False
+        self.answer_state.setText("Retrying...")
+        self.activity_label.setText(
+            "Empty answer received · retrying once..."
+        )
 
     def _on_answer_delta(self, delta: str) -> None:
-        self._answer_buffer += delta
-        self.answer_view.setPlainText(self._answer_buffer)
+        if not delta:
+            return
+
+        # Ignore leading whitespace-only chunks so an empty first attempt
+        # cannot erase the previous confirmed answer.
+        if not self._answer_stream_started and not delta.strip():
+            return
+
+        if not self._answer_stream_started:
+            self._answer_stream_started = True
+            self._pending_answer_buffer = ""
+            self.copy_code_button.setEnabled(False)
+            self.copy_code_button.setVisible(False)
+            self.answer_view.clear()
+
+        self._pending_answer_buffer += delta
+        self.answer_view.setPlainText(self._pending_answer_buffer)
 
     def _on_answer_completed(self, answer: str) -> None:
-        if answer:
-            self._answer_buffer = answer
-            self.answer_view.setPlainText(answer)
+        completed = (answer or self._pending_answer_buffer).strip()
+
+        if completed:
+            self._answer_buffer = completed
+            self.answer_view.setPlainText(completed)
             self.answer_state.setText("Ready")
             self.regenerate_button.setEnabled(True)
             self.copy_answer_button.setEnabled(True)
+            self._refresh_copy_code_button()
             self.activity_label.setText("Answer ready")
+            QTimer.singleShot(
+                0,
+                self._fit_coding_answer_to_content,
+            )
         else:
-            self.answer_state.setText("No answer")
+            # No content arrived. Preserve the previous confirmed answer.
+            self.answer_state.setText(
+                "Previous answer"
+                if self._answer_buffer
+                else "No answer"
+            )
+            self.regenerate_button.setEnabled(bool(self._answer_buffer))
+            self.copy_answer_button.setEnabled(bool(self._answer_buffer))
+            self._refresh_copy_code_button()
+            self.activity_label.setText(
+                "No new answer generated"
+            )
+
+        self._pending_answer_buffer = ""
+        self._answer_stream_started = False
 
     def _on_assistant_error(self, text: str) -> None:
+        # Preserve a useful previous answer when a new generation fails.
+        self._pending_answer_buffer = ""
+        self._answer_stream_started = False
         self.answer_state.setText("Error")
-        self.answer_view.setPlainText(f"Error: {text}")
-        self.activity_label.setText("Check configuration / console")
+        self.regenerate_button.setEnabled(bool(self._answer_buffer))
+        self.copy_answer_button.setEnabled(bool(self._answer_buffer))
+        self._refresh_copy_code_button()
+
+        if not self._answer_buffer:
+            self.answer_view.setPlainText(f"Error: {text}")
+
+        self._on_service_error(text)
+
+    def _verify_groq(self) -> None:
+        if (
+            self.controller is not None
+            or self._starting
+            or self._stopping
+        ):
+            return
+
+        self.verify_groq_button.setEnabled(False)
+        self.verify_groq_button.setText("⏳ Verificando...")
+        self.interview_button.setEnabled(False)
+        self.activity_label.setText(
+            "Checking Whisper and GPT..."
+        )
+
+        def worker() -> None:
+            try:
+                from groq_health import verify_groq_services
+
+                result = verify_groq_services()
+                self.bridge.groq_check_completed.emit(
+                    result.ready,
+                    result.message,
+                )
+            except Exception as exc:
+                self.bridge.groq_check_completed.emit(
+                    False,
+                    f"Groq preflight error: {exc}",
+                )
+
+        threading.Thread(
+            target=worker,
+            name="groq-preflight",
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def _format_latency(value: float | None) -> str:
+        if value is None:
+            return "—"
+        if value >= 1000.0:
+            return f"{value / 1000.0:.1f}s"
+        return f"{value:.0f}ms"
+
+    def _refresh_latency_label(self) -> None:
+        self.latency_label.setText(
+            "STT "
+            + self._format_latency(self._latencies.get("stt"))
+            + "   Analyze "
+            + self._format_latency(self._latencies.get("analyze"))
+            + "   Answer "
+            + self._format_latency(self._latencies.get("answer"))
+        )
+
+    def _on_latency_updated(
+        self,
+        stage: str,
+        latency_ms: float,
+    ) -> None:
+        if stage not in self._latencies:
+            return
+        self._latencies[stage] = max(0.0, float(latency_ms))
+        self._refresh_latency_label()
+
+    def _refresh_health_label(self) -> None:
+        self.health_label.setText(
+            f"🎤 {self._health_state['mic']}   "
+            f"🔊 {self._health_state['system']}   "
+            f"Groq {self._health_state['groq']}"
+        )
+
+    def _set_health(
+        self,
+        mic: str | None = None,
+        system: str | None = None,
+        groq: str | None = None,
+    ) -> None:
+        if mic is not None:
+            self._health_state["mic"] = mic
+        if system is not None:
+            self._health_state["system"] = system
+        if groq is not None:
+            self._health_state["groq"] = groq
+        self._refresh_health_label()
+
+    def _on_groq_check_completed(
+        self,
+        ready: bool,
+        message: str,
+    ) -> None:
+        can_start = (
+            self.controller is None
+            and not self._starting
+            and not self._stopping
+        )
+        self.verify_groq_button.setEnabled(can_start)
+        self.interview_button.setEnabled(can_start)
+        self.verify_groq_button.setToolTip(message)
+
+        if ready:
+            self._set_health(groq="✓")
+            self.verify_groq_button.setText("✓ Groq listo")
+            self.activity_label.setText(
+                "Groq preflight passed"
+            )
+            QMessageBox.information(
+                self,
+                "Verificar Groq",
+                message,
+            )
+        else:
+            self._set_health(groq="✕")
+            self.verify_groq_button.setText("⚠ Verificar Groq")
+            self.activity_label.setText(
+                "Groq preflight failed"
+            )
+            QMessageBox.warning(
+                self,
+                "Verificar Groq",
+                message,
+            )
+
+    def _on_service_error(self, text: str) -> None:
+        self._set_health(groq="✕")
+        is_rate_limit = "429" in text
+        self.status_dot.setStyleSheet(
+            f"color: {RED}; font-size: 9px; background: transparent;"
+        )
+        self.status_label.setText(
+            "Groq 429"
+            if is_rate_limit
+            else "Groq error"
+        )
+        self.activity_label.setText(
+            "Groq rate limit reached"
+            if is_rate_limit
+            else "Groq service error"
+        )
+        self.activity_label.setToolTip(text)
+        self.verify_groq_button.setText(
+            "⚠ Verificar Groq"
+        )
+        self.verify_groq_button.setToolTip(text)
 
     def _answer_last(self) -> None:
         if self.controller is not None:
@@ -1380,6 +2370,30 @@ class AssistantTab(QWidget):
     def _regenerate(self) -> None:
         if self.controller is not None:
             self.controller.regenerate()
+
+    def _copy_conversation(self) -> None:
+        if not self._conversation_history:
+            return
+
+        blocks = []
+        for entry in self._conversation_history.values():
+            blocks.append(
+                f'[{entry["timestamp"]}] {entry["speaker"]}\n'
+                f'{entry["text"]}'
+            )
+
+        QApplication.clipboard().setText(
+            "\n\n".join(blocks)
+        )
+        self.copy_conversation_button.setText(
+            "✓ Conversación copiada"
+        )
+        QTimer.singleShot(
+            1200,
+            lambda: self.copy_conversation_button.setText(
+                "📋 Copiar conversación"
+            ),
+        )
 
     def _copy_question(self) -> None:
         if not self._understood_question_text:
@@ -1409,6 +2423,40 @@ class AssistantTab(QWidget):
             ),
         )
 
+    @staticmethod
+    def _extract_code(answer: str) -> str:
+        if not answer:
+            return ""
+
+        match = re.search(
+            r"(?im)^\s*Code:\s*$",
+            answer,
+        )
+        if match is None:
+            return ""
+
+        return answer[match.end():].strip()
+
+    def _refresh_copy_code_button(self) -> None:
+        code = self._extract_code(self._answer_buffer)
+        available = bool(code)
+        self.copy_code_button.setVisible(available)
+        self.copy_code_button.setEnabled(available)
+
+    def _copy_code(self) -> None:
+        code = self._extract_code(self._answer_buffer)
+        if not code:
+            return
+
+        QApplication.clipboard().setText(code)
+        self.copy_code_button.setText("✓ Código copiado")
+        QTimer.singleShot(
+            1200,
+            lambda: self.copy_code_button.setText(
+                "📋 Copiar código"
+            ),
+        )
+
     def _on_status_changed(self, text: str) -> None:
         loading = text.startswith("Cargando")
         listening = text.startswith("Escuchando")
@@ -1417,6 +2465,7 @@ class AssistantTab(QWidget):
 
         if loading:
             self._starting = True
+            self._set_health(mic="…", system="…", groq="…")
             self.status_dot.setStyleSheet(
                 f"color: {WARNING}; font-size: 9px; background: transparent;"
             )
@@ -1430,29 +2479,68 @@ class AssistantTab(QWidget):
                 f"color: {GREEN}; font-size: 9px; background: transparent;"
             )
             self.status_label.setText("Listening")
+            if "solo micrófono" in text:
+                self._set_health(mic="✓", system="!", groq="✓")
+            elif "solo audio de reunión" in text:
+                self._set_health(mic="!", system="✓", groq="✓")
+            else:
+                self._set_health(mic="✓", system="✓", groq="✓")
             self.interview_button.setText("■  Detener")
             self.interview_button.setEnabled(True)
             scope = (
                 self.response_scope_combo.currentData()
                 or "interviewer"
             )
-            self.activity_label.setText(
+            listening_text = (
                 "Listening for both speakers"
                 if scope == "both"
                 else "Listening for interviewer"
             )
+            if self._capture_state == "hidden":
+                capture_suffix = "Capture hidden"
+                capture_tip = (
+                    "La ventana principal está excluida de capturas compatibles "
+                    "mientras Stage 2 está activo."
+                )
+            elif self._capture_state == "visible":
+                capture_suffix = "Capture visible"
+                capture_tip = (
+                    "Visible fue seleccionado por el usuario; la ventana puede "
+                    "aparecer normalmente en capturas."
+                )
+            elif self._capture_state == "visible_failed":
+                capture_suffix = "⚠ Capture unknown"
+                capture_tip = (
+                    "Windows no pudo confirmar el cambio a Visible. "
+                    + self._capture_exclusion_message
+                )
+            else:
+                capture_suffix = "⚠ Capture visible"
+                capture_tip = (
+                    "Hidden fue solicitado, pero Windows no pudo confirmar "
+                    "la exclusión de captura. "
+                    + self._capture_exclusion_message
+                )
+
+            self.activity_label.setText(
+                f"{listening_text} · {capture_suffix}"
+            )
+            self.activity_label.setToolTip(capture_tip)
             return
 
         if stopped:
             self.controller = None
             self._starting = False
             self._stopping = False
+            self._disable_capture_exclusion()
             self.status_dot.setStyleSheet(
                 f"color: {MUTED_DARK}; font-size: 9px; background: transparent;"
             )
             self.status_label.setText("Ready")
+            self._set_health(mic="—", system="—")
             self.interview_button.setText("▶  Iniciar entrevista")
             self.interview_button.setEnabled(True)
+            self.verify_groq_button.setEnabled(True)
             self.activity_label.setText("Stopped")
             return
 
@@ -1460,12 +2548,15 @@ class AssistantTab(QWidget):
             self.controller = None
             self._starting = False
             self._stopping = False
+            self._disable_capture_exclusion()
             self.status_dot.setStyleSheet(
                 f"color: {RED}; font-size: 9px; background: transparent;"
             )
             self.status_label.setText("Error")
+            self._set_health(mic="!", system="!", groq="!")
             self.interview_button.setText("▶  Iniciar entrevista")
             self.interview_button.setEnabled(True)
+            self.verify_groq_button.setEnabled(True)
             self.answer_view.setPlainText(text)
             return
 
@@ -1480,6 +2571,272 @@ class AssistantTab(QWidget):
                 controller.stop()
             except Exception:
                 pass
+
+        self._disable_capture_exclusion()
+
+
+
+class SettingsTab(QWidget):
+    """Centralized UI settings without changing Stage 1/Stage 2 behavior."""
+
+    def __init__(self, assistant_tab: AssistantTab):
+        super().__init__()
+        self.assistant_tab = assistant_tab
+        self._build_ui()
+
+    def _section_title(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setStyleSheet(
+            f"color: {TEXT}; font-size: 13px; font-weight: 750; "
+            "background: transparent;"
+        )
+        return label
+
+    def _hint(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setWordWrap(True)
+        label.setStyleSheet(
+            f"color: {MUTED}; font-size: 10px; background: transparent;"
+        )
+        return label
+
+    def _row_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setMinimumWidth(145)
+        label.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px; background: transparent;"
+        )
+        return label
+
+    def _card(self) -> tuple[QFrame, QVBoxLayout]:
+        card = QFrame()
+        card.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: rgba(255,255,255,7);
+                border: 1px solid rgba(255,255,255,16);
+                border-radius: 12px;
+            }}
+            """
+        )
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(11)
+        return card, layout
+
+    def _shortcut_editor(self, name: str) -> QKeySequenceEdit:
+        editor = QKeySequenceEdit(
+            self.assistant_tab.shortcut_sequence(name)
+        )
+        editor.setMinimumWidth(180)
+        editor.setStyleSheet(
+            f"""
+            QKeySequenceEdit {{
+                background-color: rgba(255,255,255,15);
+                color: {TEXT};
+                border: 1px solid rgba(255,255,255,25);
+                border-radius: 8px;
+                padding: 6px 9px;
+            }}
+            """
+        )
+        editor.keySequenceChanged.connect(
+            lambda sequence, shortcut_name=name:
+            self.assistant_tab.set_shortcut_sequence(
+                shortcut_name,
+                sequence,
+            )
+        )
+        return editor
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 18, 22, 18)
+        root.setSpacing(14)
+
+        heading = QLabel("Settings")
+        heading.setStyleSheet(
+            f"color: {TEXT}; font-size: 16px; font-weight: 800; "
+            "background: transparent;"
+        )
+        subtitle = self._hint(
+            "Configura Stage 2 aquí para mantener la pantalla de entrevista "
+            "limpia y enfocada."
+        )
+        root.addWidget(heading)
+        root.addWidget(subtitle)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+        )
+
+        body = QWidget()
+        body.setStyleSheet("background: transparent;")
+        content = QVBoxLayout(body)
+        content.setContentsMargins(0, 0, 4, 0)
+        content.setSpacing(12)
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
+
+        interview_card, interview = self._card()
+        interview.addWidget(self._section_title("Interview"))
+
+        input_row = QHBoxLayout()
+        input_row.addWidget(self._row_label("Input language"))
+        input_value = QLabel("Auto · English / Español")
+        input_value.setStyleSheet(
+            f"color: {TEXT}; font-size: 11px; background: transparent;"
+        )
+        input_value.setToolTip(
+            "Stage 2 detecta inglés o español de forma independiente por turno."
+        )
+        input_row.addWidget(input_value)
+        input_row.addStretch()
+        interview.addLayout(input_row)
+
+        response_row = QHBoxLayout()
+        response_row.addWidget(self._row_label("Responder a"))
+        response_row.addWidget(self.assistant_tab.response_scope_combo)
+        response_row.addStretch()
+        interview.addLayout(response_row)
+
+        answer_row = QHBoxLayout()
+        answer_row.addWidget(self._row_label("Answer language"))
+        answer_row.addWidget(self.assistant_tab.language_combo)
+        answer_row.addStretch()
+        interview.addLayout(answer_row)
+
+        interview.addWidget(
+            self._hint(
+                "Entrevistador es el modo recomendado para una entrevista real. "
+                "Ambos es útil para pruebas."
+            )
+        )
+        content.addWidget(interview_card)
+
+        shortcuts_card, shortcuts = self._card()
+        shortcuts.addWidget(self._section_title("Keyboard shortcuts"))
+
+        shortcut_rows = (
+            ("Responder último", "answer_last"),
+            ("Regenerar", "regenerate"),
+            ("Copiar respuesta", "copy_answer"),
+            ("Copiar código", "copy_code"),
+        )
+
+        for label_text, shortcut_name in shortcut_rows:
+            row = QHBoxLayout()
+            row.addWidget(self._row_label(label_text))
+            row.addWidget(
+                self._shortcut_editor(shortcut_name)
+            )
+            row.addStretch()
+            shortcuts.addLayout(row)
+
+        shortcuts.addWidget(
+            self._hint(
+                "Los atajos solo actúan dentro de la pestaña Asistente y se "
+                "guardan automáticamente para la próxima ejecución."
+            )
+        )
+        content.addWidget(shortcuts_card)
+
+        privacy_card, privacy = self._card()
+        privacy.addWidget(self._section_title("Privacy & screen sharing"))
+
+        capture_row = QHBoxLayout()
+        capture_row.addWidget(self._row_label("Capture"))
+        capture_row.addWidget(self.assistant_tab.capture_mode_combo)
+        capture_row.addSpacing(10)
+        capture_row.addWidget(self.assistant_tab.capture_status_label)
+        capture_row.addStretch()
+        privacy.addLayout(capture_row)
+
+        privacy.addWidget(
+            self._hint(
+                "Hidden intenta excluir toda la ventana de Meeting Assistant "
+                "de capturas compatibles de Windows. Visible restaura la "
+                "captura normal. El cambio se aplica también durante Stage 2."
+            )
+        )
+        content.addWidget(privacy_card)
+
+        services_card, services = self._card()
+        services.addWidget(self._section_title("Groq services"))
+
+        verify_row = QHBoxLayout()
+        verify_row.addWidget(self._row_label("Preflight"))
+        verify_row.addWidget(self.assistant_tab.verify_groq_button)
+        verify_row.addStretch()
+        services.addLayout(verify_row)
+
+        stt_row = QHBoxLayout()
+        stt_row.addWidget(self._row_label("Speech to text"))
+        stt_value = QLabel("Groq · Whisper Large V3")
+        stt_value.setStyleSheet(
+            f"color: {TEXT}; font-size: 11px; background: transparent;"
+        )
+        stt_row.addWidget(stt_value)
+        stt_row.addStretch()
+        services.addLayout(stt_row)
+
+        gpt_row = QHBoxLayout()
+        gpt_row.addWidget(self._row_label("Assistant"))
+        gpt_value = QLabel("Groq · GPT-OSS 120B")
+        gpt_value.setStyleSheet(
+            f"color: {TEXT}; font-size: 11px; background: transparent;"
+        )
+        gpt_row.addWidget(gpt_value)
+        gpt_row.addStretch()
+        services.addLayout(gpt_row)
+
+        services.addWidget(
+            self._hint(
+                "Verificar Groq hace llamadas mínimas a Whisper y GPT antes "
+                "de una entrevista. No cambia la configuración del asistente."
+            )
+        )
+        content.addWidget(services_card)
+
+        diagnostics_card, diagnostics = self._card()
+        diagnostics.addWidget(self._section_title("Diagnostics"))
+
+        privacy_row = QHBoxLayout()
+        privacy_row.addWidget(self._row_label("Conversation content"))
+        privacy_value = QLabel("Not logged")
+        privacy_value.setStyleSheet(
+            f"color: {GREEN}; font-size: 11px; background: transparent;"
+        )
+        privacy_row.addWidget(privacy_value)
+        privacy_row.addStretch()
+        diagnostics.addLayout(privacy_row)
+
+        metadata_row = QHBoxLayout()
+        metadata_row.addWidget(self._row_label("Runtime metadata"))
+        metadata_value = QLabel("Console only")
+        metadata_value.setStyleSheet(
+            f"color: {TEXT}; font-size: 11px; background: transparent;"
+        )
+        metadata_row.addWidget(metadata_value)
+        metadata_row.addStretch()
+        diagnostics.addLayout(metadata_row)
+
+        diagnostics.addWidget(
+            self._hint(
+                "Stage 2 registra solo eventos y métricas como latencia, "
+                "speaker, segment id y tamaño del texto; no imprime la "
+                "conversación en los logs de diagnóstico."
+            )
+        )
+        content.addWidget(diagnostics_card)
+
+        content.addStretch()
 
 
 class MainWindow(QWidget):
@@ -1605,9 +2962,11 @@ class MainWindow(QWidget):
 
         self.subtitle_tab = SubtitleTab()
         self.assistant_tab = AssistantTab()
+        self.settings_tab = SettingsTab(self.assistant_tab)
 
         self.tabs.addTab(self.subtitle_tab, "Subtítulo")
         self.tabs.addTab(self.assistant_tab, "Asistente")
+        self.tabs.addTab(self.settings_tab, "Settings")
 
         # Stage 1 is always selected when the app starts.
         self.tabs.setCurrentIndex(0)

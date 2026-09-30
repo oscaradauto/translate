@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 from collections import Counter, deque
 from typing import Callable
 
 from config import (
     ASSISTANT_RESPONSE_SCOPE,
     GROQ_STT_MODEL,
+    INTERVIEW_CODE_LANGUAGE,
     INTERVIEW_CONTEXT_TURNS,
     INTERVIEW_MAX_UTTERANCE_SECONDS,
     INTERVIEW_QUESTION_DEBOUNCE_SECONDS,
@@ -26,9 +28,11 @@ from config import (
     MIC_DEVICE_INDEX,
 )
 from interview_assistant import (
+    CodingContext,
     ConversationTurn,
     GroqInterviewAssistant,
 )
+from groq_health import describe_groq_error
 from vad_detector import ListenerController
 
 
@@ -62,14 +66,32 @@ class InterviewController:
         self._question_timer: threading.Timer | None = None
 
         self._answer_lock = threading.Lock()
+        self._queued_answer_text = ""
+        self._queued_answer_speaker = ""
+        self._queued_answer_force = False
         self._last_interviewer_text = ""
         self._last_turn_text = ""
         self._last_turn_speaker = ""
         self._last_question = ""
         self._last_answer = ""
+        self._coding_context = CodingContext(
+            language=INTERVIEW_CODE_LANGUAGE
+        )
         self._topic_memory = ""
         self._deferred_response_text = ""
         self._deferred_response_speaker = ""
+
+    @staticmethod
+    def _diag(event: str, **fields) -> None:
+        """Metadata-only Stage 2 diagnostics; never prints transcript text."""
+        stamp = time.strftime("%H:%M:%S")
+        details = " ".join(
+            f"{key}={value}"
+            for key, value in fields.items()
+            if value not in {"", None}
+        )
+        suffix = f" {details}" if details else ""
+        print(f"[Stage2Diag {stamp}] {event}{suffix}")
 
     def start(self) -> None:
         if self.running:
@@ -90,6 +112,12 @@ class InterviewController:
         self._last_turn_speaker = ""
         self._last_question = ""
         self._last_answer = ""
+        self._queued_answer_text = ""
+        self._queued_answer_speaker = ""
+        self._queued_answer_force = False
+        self._coding_context = CodingContext(
+            language=INTERVIEW_CODE_LANGUAGE
+        )
         self._topic_memory = ""
         self._deferred_response_text = ""
         self._deferred_response_speaker = ""
@@ -98,6 +126,7 @@ class InterviewController:
             "on_status": self._on_listener_status,
             "on_subtitle_partial": self._on_partial,
             "on_subtitle": self._on_final,
+            "on_transcription_error": self._on_transcription_error,
         }
 
         transcription_language = (
@@ -146,6 +175,9 @@ class InterviewController:
             self._question_timer = None
             self._pending_response_parts.clear()
             self._pending_response_speaker = ""
+            self._queued_answer_text = ""
+            self._queued_answer_speaker = ""
+            self._queued_answer_force = False
 
         if timer is not None:
             timer.cancel()
@@ -216,7 +248,38 @@ class InterviewController:
         self._start_answer(question, force=True)
 
     def _on_listener_status(self, text: str) -> None:
+        prefix = "__STAGE2_LATENCY__:"
+        if text.startswith(prefix):
+            try:
+                _, stage, value = text.split(":", 2)
+                latency_ms = float(value)
+            except (ValueError, TypeError):
+                return
+
+            self._emit("on_latency", stage, latency_ms)
+            self._diag(
+                "latency",
+                stage=stage,
+                ms=f"{latency_ms:.1f}",
+            )
+            return
+
         self._emit("on_status", text)
+
+    def _on_transcription_error(
+        self,
+        source: str,
+        exc: Exception,
+    ) -> None:
+        if INTERVIEW_STT_PROVIDER == "groq":
+            message = describe_groq_error(
+                exc,
+                f"Whisper {GROQ_STT_MODEL}",
+            )
+        else:
+            message = f"Transcription {source}: {exc}"
+
+        self._emit("on_service_error", message)
 
     def _on_partial(
         self,
@@ -248,11 +311,19 @@ class InterviewController:
             return
 
         speaker = "YOU" if source == "YOU" else "INTERVIEWER"
+        self._diag(
+            "stt_final",
+            speaker=speaker,
+            segment=segment_id,
+            chars=len(cleaned),
+        )
 
         if self._is_low_quality_transcript(cleaned):
-            print(
-                f"[Stage2:{speaker}] Descarta transcripción ruidosa: "
-                f"{cleaned[:160]}"
+            self._diag(
+                "stt_rejected",
+                speaker=speaker,
+                segment=segment_id,
+                chars=len(cleaned),
             )
             self._emit(
                 "on_transcript_rejected",
@@ -426,10 +497,20 @@ class InterviewController:
             return
 
         if not self._answer_lock.acquire(blocking=False):
-            self._emit(
-                "on_assistant_error",
-                "El asistente todavía está generando la respuesta anterior.",
+            # Never drop a new interview question just because the previous
+            # answer is still streaming. Keep only the latest pending request
+            # so the assistant catches up instead of generating stale backlog.
+            with self._pending_lock:
+                self._queued_answer_text = question.strip()
+                self._queued_answer_speaker = speaker
+                self._queued_answer_force = force
+
+            self._diag(
+                "answer_queued",
+                speaker=speaker or "unknown",
+                force=force,
             )
+            self._emit("on_answer_queued", question.strip())
             return
 
         recent_turns = list(self._turns)
@@ -445,6 +526,85 @@ class InterviewController:
         )
         thread.start()
 
+    def _dispatch_queued_answer(self) -> None:
+        with self._pending_lock:
+            question = self._queued_answer_text
+            speaker = self._queued_answer_speaker
+            force = self._queued_answer_force
+            self._queued_answer_text = ""
+            self._queued_answer_speaker = ""
+            self._queued_answer_force = False
+
+        if not question or not self.running:
+            return
+
+        self._start_answer(
+            question,
+            force=force,
+            speaker=speaker,
+        )
+
+    def _update_coding_context(
+        self,
+        analysis,
+        reconstructed: str,
+    ) -> CodingContext:
+        current = self._coding_context
+
+        if analysis.interview_type != "coding":
+            return current
+
+        is_new_problem = (
+            analysis.coding_new_problem
+            or (
+                not current.problem
+                and bool(
+                    analysis.coding_problem
+                    or reconstructed
+                )
+            )
+        )
+
+        problem = (
+            analysis.coding_problem.strip()
+            or (
+                reconstructed.strip()
+                if is_new_problem
+                else current.problem
+            )
+        )
+
+        if is_new_problem:
+            constraints = analysis.coding_constraints
+            last_solution = ""
+        else:
+            # The contextualizer returns the full currently-active constraint
+            # set, so a follow-up can replace an obsolete constraint instead
+            # of accumulating contradictions forever.
+            constraints = (
+                analysis.coding_constraints
+                if analysis.coding_constraints
+                else current.constraints
+            )
+            last_solution = current.last_solution
+
+        code_language = current.language or INTERVIEW_CODE_LANGUAGE
+        if analysis.coding_language != "unknown":
+            code_language = analysis.coding_language
+
+        request = analysis.coding_request
+        if request == "none":
+            request = current.request
+
+        self._coding_context = CodingContext(
+            problem=problem,
+            request=request,
+            constraints=constraints,
+            language=code_language,
+            last_solution=last_solution,
+        )
+        return self._coding_context
+
     def _answer_worker(
         self,
         question: str,
@@ -458,10 +618,23 @@ class InterviewController:
             if assistant is None or not self.running:
                 return
 
+            analyze_started_at = time.perf_counter()
             analysis = assistant.analyze_turn(
                 raw_turn=question,
                 recent_turns=recent_turns,
                 topic_memory=self._topic_memory,
+                coding_context=self._coding_context,
+            )
+            analyze_ms = (
+                time.perf_counter() - analyze_started_at
+            ) * 1000.0
+            self._emit("on_latency", "analyze", analyze_ms)
+            self._diag(
+                "latency",
+                stage="analyze",
+                ms=f"{analyze_ms:.1f}",
+                type=analysis.interview_type,
+                action=analysis.action,
             )
 
             if analysis.topic or analysis.terms:
@@ -480,12 +653,37 @@ class InterviewController:
                 else question.strip()
             )
 
+            coding_context = self._update_coding_context(
+                analysis,
+                reconstructed,
+            )
+
+            display_topic = analysis.topic
+            if analysis.interview_type == "coding":
+                display_topic = (
+                    f"Coding · {analysis.topic}"
+                    if analysis.topic
+                    else "Coding"
+                )
+            elif analysis.interview_type == "behavioral":
+                display_topic = (
+                    f"Behavioral · {analysis.topic}"
+                    if analysis.topic
+                    else "Behavioral"
+                )
+
             self._emit(
                 "on_turn_understood",
                 reconstructed,
-                analysis.topic,
+                display_topic,
                 analysis.language,
             )
+
+            # Behavioral assistance is intentionally outside Stage 2 scope,
+            # even when the user presses the manual fallback button.
+            if analysis.interview_type == "behavioral":
+                self._emit("on_question_ignored", reconstructed)
+                return
 
             if not force:
                 if analysis.action == "WAIT":
@@ -502,29 +700,86 @@ class InterviewController:
             self._emit("on_question_detected", reconstructed)
             self._emit("on_answer_started", reconstructed)
 
-            chunks: list[str] = []
+            generated_answer = ""
+            generation_started_at = time.perf_counter()
 
-            def on_delta(delta: str) -> None:
-                chunks.append(delta)
-                self._emit("on_answer_delta", delta)
+            # A rare Groq stream can finish successfully without returning
+            # usable content. Retry exactly once with the same question,
+            # context and output language before giving up.
+            for attempt in range(2):
+                chunks: list[str] = []
 
-            answer = assistant.stream_answer(
-                question=reconstructed,
-                recent_turns=recent_turns,
-                language=language,
-                on_delta=on_delta,
-                topic_memory=self._topic_memory,
+                def on_delta(delta: str) -> None:
+                    chunks.append(delta)
+                    self._emit("on_answer_delta", delta)
+
+                answer = assistant.stream_answer(
+                    question=reconstructed,
+                    recent_turns=recent_turns,
+                    language=language,
+                    on_delta=on_delta,
+                    topic_memory=self._topic_memory,
+                    interview_type=analysis.interview_type,
+                    coding_context=(
+                        coding_context
+                        if analysis.interview_type == "coding"
+                        else None
+                    ),
+                )
+
+                generated_answer = (
+                    answer or "".join(chunks)
+                ).strip()
+
+                if generated_answer:
+                    break
+
+                if attempt == 0 and self.running:
+                    print(
+                        "[Stage2] Groq devolvió una respuesta vacía; "
+                        "reintentando una vez."
+                    )
+                    self._emit("on_answer_retrying")
+
+            answer_ms = (
+                time.perf_counter() - generation_started_at
+            ) * 1000.0
+            self._emit("on_latency", "answer", answer_ms)
+            self._diag(
+                "latency",
+                stage="answer",
+                ms=f"{answer_ms:.1f}",
+                type=analysis.interview_type,
+                produced=bool(generated_answer),
             )
 
-            self._last_answer = answer or "".join(chunks).strip()
+            if generated_answer:
+                self._last_answer = generated_answer
+
+                if analysis.interview_type == "coding":
+                    self._coding_context = CodingContext(
+                        problem=coding_context.problem,
+                        request=coding_context.request,
+                        constraints=coding_context.constraints,
+                        language=coding_context.language,
+                        last_solution=generated_answer,
+                    )
+
             self._emit(
                 "on_answer_completed",
-                self._last_answer,
+                generated_answer,
             )
         except Exception as exc:
-            self._emit("on_assistant_error", str(exc))
+            self._emit(
+                "on_assistant_error",
+                describe_groq_error(
+                    exc,
+                    "GPT " + str(getattr(self.assistant, "model", "Groq")),
+                ),
+            )
         finally:
             self._answer_lock.release()
+            self._dispatch_queued_answer()
 
     def _emit(self, name: str, *args) -> None:
         callback = self.callbacks.get(name)
