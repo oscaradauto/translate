@@ -1405,20 +1405,26 @@ class AssistantTab(QWidget):
         )
         self.copy_question_button.setEnabled(bool(question))
 
+        is_coding = topic.startswith("Coding")
         self._pending_understood_question = ""
         self._pending_understood_topic = ""
         self._pending_understood_language = ""
 
         self.activity_label.setText(
-            "Technical question detected"
+            "Coding question detected"
+            if is_coding
+            else "Technical question detected"
         )
 
     def _on_question_ignored(self, text: str) -> None:
+        ignored_topic = self._pending_understood_topic
         self._pending_understood_question = ""
         self._pending_understood_topic = ""
         self._pending_understood_language = ""
         self.activity_label.setText(
-            "Non-technical turn ignored"
+            "Behavioral turn ignored"
+            if ignored_topic.startswith("Behavioral")
+            else "Non-technical turn ignored"
         )
 
     def _on_answer_started(self, question: str) -> None:
