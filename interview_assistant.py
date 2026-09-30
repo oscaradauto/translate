@@ -15,6 +15,7 @@ from typing import Callable, Iterable
 
 from groq import Groq
 
+from skills_loader import build_context_block
 from config import (
     GROQ_CODING_MAX_COMPLETION_TOKENS,
     GROQ_MAX_COMPLETION_TOKENS,
@@ -38,7 +39,8 @@ Do not use Markdown, headings, bullet lists, bold text, or filler such as 'Great
 For simple definition/difference questions: definition + key distinction + one practical point.
 For architecture/system-design questions: approach + main trade-off + one practical detail.
 Use the ongoing interview context to resolve follow-ups and pronouns.
-Do not invent personal experience, employers, incidents, metrics, or projects.
+When relevant senior-developer profile context is provided, use it as supporting background without repeating it mechanically.
+Do not invent personal experience, employers, incidents, metrics, or projects beyond what the provided profile context explicitly supports.
 Return only the answer the interviewee could naturally say aloud."""
 
 SYSTEM_PROMPT_ES = """Eres un desarrollador senior ayudando durante una entrevista técnica en vivo.
@@ -53,7 +55,8 @@ No uses Markdown, títulos, listas, negritas ni relleno como 'Buena pregunta', '
 Para definiciones o diferencias: definición + diferencia clave + un punto práctico.
 Para arquitectura/system design: enfoque + trade-off principal + un detalle práctico.
 Usa el contexto continuo de la entrevista para resolver follow-ups y pronombres.
-No inventes experiencia personal, empleadores, incidentes, métricas ni proyectos.
+Cuando se proporcione contexto relevante del perfil senior, úsalo como apoyo sin repetirlo mecánicamente.
+No inventes experiencia personal, empleadores, incidentes, métricas ni proyectos más allá de lo que el perfil proporcionado soporte explícitamente.
 Devuelve únicamente la respuesta que el entrevistado podría decir de forma natural."""
 
 CODING_PROMPT_EN = """You are a senior software engineer assisting during a live coding / whiteboarding interview.
@@ -531,11 +534,34 @@ class GroqInterviewAssistant:
             include_solution=is_coding,
         )
 
+        # Skill retrieval is intentionally local and optional. Coding answers
+        # already have a specialized prompt/context, so avoid spending tokens
+        # on general profile material there. For regular questions, inject only
+        # the few profile entries matching the reconstructed question/topic.
+        skill_context = ""
+        if not is_coding:
+            skill_query = " ".join(
+                part
+                for part in (question, topic_memory)
+                if part and part.strip()
+            )
+            skill_context = build_context_block(
+                skill_query,
+                language_mode=language,
+                max_matches=3,
+            )
+
         user_content = (
             f"Current interview topic:\n{topic_memory or '(unknown)'}\n\n"
             f"Recent interview conversation:\n{context or '(none)'}\n\n"
             f"Contextually reconstructed interviewer question:\n{question}\n\n"
         )
+
+        if skill_context:
+            user_content += (
+                "Relevant senior-developer profile context:\n"
+                f"{skill_context}\n\n"
+            )
 
         if is_coding:
             user_content += (
