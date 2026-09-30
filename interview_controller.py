@@ -47,6 +47,8 @@ class InterviewController:
 
         self._answer_lock = threading.Lock()
         self._last_interviewer_text = ""
+        self._last_turn_text = ""
+        self._last_turn_speaker = ""
         self._last_question = ""
         self._last_answer = ""
 
@@ -64,6 +66,8 @@ class InterviewController:
         self._turns.clear()
         self._pending_interviewer.clear()
         self._last_interviewer_text = ""
+        self._last_turn_text = ""
+        self._last_turn_speaker = ""
         self._last_question = ""
         self._last_answer = ""
 
@@ -104,11 +108,21 @@ class InterviewController:
             self._emit("on_language_changed", language)
 
     def answer_last_interviewer_turn(self) -> None:
+        """Manually answer the latest interviewer turn.
+
+        During solo development/testing there may be no INTERVIEWER audio yet.
+        In that case fall back to the latest finalized YOU utterance so the
+        developer can verify Groq end-to-end without a second device.
+        Automatic answers still only originate from INTERVIEWER turns.
+        """
         question = self._last_interviewer_text.strip()
+        if not question:
+            question = self._last_turn_text.strip()
+
         if not question:
             self._emit(
                 "on_assistant_error",
-                "Todavía no hay una intervención del entrevistador.",
+                "Todavía no hay una intervención para responder.",
             )
             return
 
@@ -155,6 +169,9 @@ class InterviewController:
             return
 
         speaker = "YOU" if source == "YOU" else "INTERVIEWER"
+        self._last_turn_text = cleaned
+        self._last_turn_speaker = speaker
+
         self._turns.append(
             ConversationTurn(speaker=speaker, text=cleaned)
         )
