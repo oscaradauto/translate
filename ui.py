@@ -1119,8 +1119,9 @@ class AssistantTab(QWidget):
             partial=False,
         )
 
-        if speaker == "INTERVIEWER":
-            self.answer_last_button.setEnabled(True)
+        # Manual fallback is also useful for solo testing: if the only
+        # available utterance is YOU, InterviewController can answer it.
+        self.answer_last_button.setEnabled(True)
 
     def _on_question_candidate(self, text: str) -> None:
         self.activity_label.setText(
