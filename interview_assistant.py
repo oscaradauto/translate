@@ -268,16 +268,39 @@ class GroqInterviewAssistant:
         )
         has_operation = bool(re.search(operation_pattern, text))
 
-        # Pronoun-heavy requests are follow-ups to the active problem, not a
-        # new self-contained exercise.
+        # Do not force an answer when STT finalized a sentence in the middle
+        # of a coding requirement; the next fragment will be merged by the
+        # controller after the contextualizer returns WAIT.
+        raw_tail = re.sub(
+            r"[\s\.,;:!?…]+$",
+            "",
+            raw_turn.casefold(),
+        )
+        looks_incomplete = bool(
+            re.search(
+                r"\b(?:a|de|en|con|para|que|to|into|as|with)$",
+                raw_tail,
+            )
+        )
+
+        # Pronoun-heavy requests are follow-ups to the active problem, but a
+        # relative clause such as "method that converts..." is self-contained.
         reference_pattern = (
-            r"\b(?:lo mismo|la misma|eso|esto|anterior|it|that|this|same)\b"
+            r"\b(?:lo mismo|la misma|eso|esto|anterior|it|same)\b"
+            r"|\b(?:that|this)\s+"
+            r"(?:solution|approach|method|code|implementation|one)\b"
+            r"|\bdo\s+(?:that|this)\b"
         )
         has_reference = bool(re.search(reference_pattern, text))
 
+        explicit = (
+            is_implementation
+            and has_operation
+            and not looks_incomplete
+        )
         return (
-            is_implementation and has_operation,
-            is_implementation and has_operation and not has_reference,
+            explicit,
+            explicit and not has_reference,
         )
 
     def analyze_turn(
