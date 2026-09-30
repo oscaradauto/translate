@@ -1,0 +1,5 @@
+# Stage 2 - technical interview assistant
+# Includes all local audio/transcription dependencies from Stage 1.
+-r requirements-stage1.txt
+
+groq
