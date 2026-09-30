@@ -17,7 +17,6 @@ load_dotenv()
 # Stage 1 - Live subtitles
 # ---------------------------------------------------------------------------
 
-MEETING_LANGUAGE = "en"
 
 # PyAudio input device index for the physical microphone.
 MIC_DEVICE_INDEX = int(os.getenv("MIC_DEVICE_INDEX", "-1"))
@@ -115,7 +114,6 @@ WHISPER_INITIAL_PROMPT = os.getenv(
 # ---------------------------------------------------------------------------
 
 ASSISTANT_LANGUAGE = os.getenv("ASSISTANT_LANGUAGE", "en")
-AI_PROVIDER = os.getenv("AI_PROVIDER", "groq")
 
 # Which speaker is allowed to trigger Stage 2 answers.
 # interviewer: real interview mode (recommended)
@@ -205,17 +203,3 @@ INTERVIEW_CONTEXT_TURNS = int(
 INTERVIEW_QUESTION_DEBOUNCE_SECONDS = float(
     os.getenv("INTERVIEW_QUESTION_DEBOUNCE_SECONDS", "1.6")
 )
-
-
-def get_meeting_language() -> str:
-    return MEETING_LANGUAGE
-
-
-def get_language_mode() -> str:
-    """Compatibility helper for legacy assistant code."""
-    return ASSISTANT_LANGUAGE if ASSISTANT_LANGUAGE in {"en", "es"} else "en"
-
-
-def get_ai_provider_name() -> str:
-    """Compatibility helper for legacy provider code."""
-    return AI_PROVIDER
