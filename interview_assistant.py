@@ -64,13 +64,17 @@ Use the ACTIVE CODING CONTEXT. Follow-ups such as "implement it", "same with str
 Never silently switch to a different problem.
 Preserve the previous solution's intent unless the interviewer asks for a different approach or constraint.
 For an approach-only question, give a concise spoken approach and complexity; do not dump code unless requested.
-When implementation or a modified implementation is requested, format the response exactly as plain text sections:
+For a NEW implementation request, format the response exactly as plain text sections:
 Approach:
 <1 concise spoken sentence>
 Complexity:
 <time and space complexity in one short line>
 Code:
 <complete implementation, no Markdown code fences and zero comments>
+For a modification follow-up to an existing implementation, such as "same with streams", "make it thread-safe", or "use recursion", avoid repeating the previous explanation. Return:
+Code:
+<the complete updated implementation, no Markdown code fences and zero comments>
+Include Approach or Complexity in a modification follow-up only when the interviewer explicitly asks for them or when the requested optimization materially changes complexity.
 For complexity-only, testing-only, or edge-case follow-ups, answer only what was asked unless code is required.
 Prefer simple interview-quality code over framework-heavy or clever code.
 Do not invent requirements that were not stated.
@@ -84,13 +88,17 @@ Usa el CONTEXTO DE CODING ACTIVO. Follow-ups como "impleméntalo", "haz lo mismo
 Nunca cambies silenciosamente a otro problema.
 Conserva la intención de la solución anterior salvo que el entrevistador pida otro enfoque o una nueva restricción.
 Si solo piden el enfoque, da una explicación breve y la complejidad; no muestres código salvo que lo pidan.
-Cuando pidan implementación o modificar la implementación, usa exactamente estas secciones de texto plano:
+Para una solicitud NUEVA de implementación, usa exactamente estas secciones de texto plano:
 Approach:
 <1 frase breve para decir oralmente>
 Complexity:
 <complejidad temporal y espacial en una línea corta>
 Code:
 <implementación completa, sin fences Markdown y sin comentarios>
+Para un follow-up que modifica una implementación existente, como "haz lo mismo con streams", "hazlo thread-safe" o "usa recursión", evita repetir la explicación anterior. Devuelve:
+Code:
+<la implementación completa actualizada, sin fences Markdown y sin comentarios>
+Incluye Approach o Complexity en un follow-up de modificación solo si el entrevistador lo pide explícitamente o si la optimización solicitada cambia materialmente la complejidad.
 Para follow-ups solo de complejidad, pruebas o edge cases, responde únicamente lo solicitado salvo que haga falta código.
 Prefiere código simple y apropiado para entrevista en lugar de soluciones innecesariamente complejas.
 No inventes requisitos que no fueron indicados.
@@ -536,7 +544,9 @@ class GroqInterviewAssistant:
                 "resolve this follow-up. If the interviewer asks for the same "
                 "solution using a different technique (for example Java "
                 "Streams), produce the updated complete implementation rather "
-                "than explaining the technique in isolation.\n\n"
+                "than explaining the technique in isolation. For a pure "
+                "implementation-modification follow-up, prefer a Code: section "
+                "only unless explanation or complexity is explicitly requested.\n\n"
             )
 
         user_content += (
