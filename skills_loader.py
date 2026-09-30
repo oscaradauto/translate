@@ -141,22 +141,28 @@ def _language_value(
     return " ".join(str(value).strip().split())
 
 
-def build_context_block(
+def build_context_packet(
     question_text: str,
     language_mode: str = "en",
     max_matches: int = 3,
-) -> str:
-    """Build a compact profile block for GPT, or "" when nothing matches."""
+) -> tuple[str, bool]:
+    """Return compact profile context plus verified-experience availability.
+
+    General senior-profile summaries are NOT evidence that the candidate has
+    personally done something. First-person past experience is allowed only
+    when a matched skill contains an explicit verified_experience_en/es field.
+    """
     profile, _ = _load_document()
     matches = find_matching_skills(
         question_text,
         max_matches=max_matches,
     )
     if not matches:
-        return ""
+        return "", False
 
     language_mode = "es" if language_mode == "es" else "en"
     lines: list[str] = []
+    has_verified_experience = False
 
     profile_name = str(
         profile.get("name", "Senior Software Developer")
@@ -176,6 +182,11 @@ def build_context_block(
             "answer_guidance",
             language_mode,
         )
+        verified_experience = _language_value(
+            skill,
+            "verified_experience",
+            language_mode,
+        )
 
         tools = skill.get("tools", [])
         if not isinstance(tools, list):
@@ -193,13 +204,35 @@ def build_context_block(
             parts.append(f"Tools/technologies: {tool_text}.")
         if guidance:
             parts.append(f"Response guidance: {guidance}")
+        if verified_experience:
+            has_verified_experience = True
+            parts.append(
+                "Verified personal experience: "
+                + verified_experience
+            )
 
         lines.append(" ".join(parts))
 
     header = (
-        "Relevant senior-developer profile context. Use it only when it "
-        "actually helps answer the question. Treat it as background guidance, "
-        "not permission to invent employers, project names, dates, metrics, "
-        "incidents, or personal achievements that are not explicitly present."
+        "Relevant senior-developer profile context. General profile summaries "
+        "describe strong senior-level knowledge and preferred approaches; they "
+        "are NOT proof of personal past experience. Only text explicitly marked "
+        "'Verified personal experience' may support claims such as 'I used', "
+        "'I implemented', 'I configured', 'I led', or 'I handled'. Never invent "
+        "employers, project names, dates, metrics, incidents, or achievements."
     )
-    return header + "\n" + "\n".join(lines)
+    return header + "\n" + "\n".join(lines), has_verified_experience
+
+
+def build_context_block(
+    question_text: str,
+    language_mode: str = "en",
+    max_matches: int = 3,
+) -> str:
+    """Compatibility wrapper returning only the context text."""
+    context, _ = build_context_packet(
+        question_text,
+        language_mode=language_mode,
+        max_matches=max_matches,
+    )
+    return context
