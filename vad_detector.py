@@ -642,7 +642,12 @@ class ListenerController:
         source: str,
         exc: Exception,
     ) -> None:
-        print(f"[FasterWhisper:{source}] {exc}")
+        print(f"[Transcription:{source}] {exc}")
+        self._emit(
+            "on_transcription_error",
+            source,
+            exc,
+        )
 
     def _on_capture_error(self, source: str, exc: Exception) -> None:
         print(f"[Audio:{source}] {exc}")
