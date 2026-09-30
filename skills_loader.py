@@ -1,95 +1,191 @@
+"""Fast local retrieval for the Stage 2 senior-developer profile.
+
+The YAML file is optional enrichment. If it is missing, invalid, or no skill
+matches the current question, callers receive an empty context block and GPT
+continues with its normal general knowledge + interview conversation context.
+"""
+
+from __future__ import annotations
+
 import os
+import re
+import unicodedata
+from typing import Any
+
 import yaml
 
-SKILLS_FILE_PATH = os.path.join(os.path.dirname(__file__), "knowledge", "skill.yaml")
+SKILLS_FILE_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "knowledge",
+    "skill.yaml",
+)
 
-_skills_cache = None
-_last_mtime = None
+_skills_cache: list[dict[str, Any]] | None = None
+_profile_cache: dict[str, Any] | None = None
+_last_mtime: float | None = None
 
 
-def _load_raw_skills():
-    global _skills_cache, _last_mtime
+def _normalize(text: str) -> str:
+    folded = unicodedata.normalize("NFD", str(text).casefold())
+    folded = "".join(
+        char
+        for char in folded
+        if unicodedata.category(char) != "Mn"
+    )
+    return " ".join(
+        re.sub(r"[^a-z0-9+#./ -]+", " ", folded).split()
+    )
+
+
+def _load_document() -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    global _skills_cache, _profile_cache, _last_mtime
+
     if not os.path.exists(SKILLS_FILE_PATH):
-        print(f"[SkillsLoader] Archivo no encontrado: {SKILLS_FILE_PATH}")
+        return {}, []
+
+    try:
+        mtime = os.path.getmtime(SKILLS_FILE_PATH)
+        if (
+            _skills_cache is not None
+            and _profile_cache is not None
+            and mtime == _last_mtime
+        ):
+            return _profile_cache, _skills_cache
+
+        with open(SKILLS_FILE_PATH, "r", encoding="utf-8") as file:
+            data = yaml.safe_load(file) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        print(f"[SkillsLoader] No se pudo cargar skill.yaml: {exc}")
+        return {}, []
+
+    raw_profile = data.get("profile", {})
+    raw_skills = data.get("skills", [])
+
+    profile = raw_profile if isinstance(raw_profile, dict) else {}
+    skills = [
+        item
+        for item in raw_skills
+        if isinstance(item, dict)
+    ] if isinstance(raw_skills, list) else []
+
+    _profile_cache = profile
+    _skills_cache = skills
+    _last_mtime = mtime
+    return profile, skills
+
+
+def find_matching_skills(
+    question_text: str,
+    max_matches: int = 3,
+) -> list[dict[str, Any]]:
+    """Return the most relevant local profile entries without an API call."""
+    normalized_question = _normalize(question_text)
+    if not normalized_question:
         return []
 
-    mtime = os.path.getmtime(SKILLS_FILE_PATH)
-    if _skills_cache is not None and mtime == _last_mtime:
-        return _skills_cache
+    _, skills = _load_document()
+    scored: list[tuple[int, int, dict[str, Any]]] = []
 
-    with open(SKILLS_FILE_PATH, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    for index, skill in enumerate(skills):
+        score = 0
+        topic = _normalize(skill.get("topic", ""))
+        if topic and topic in normalized_question:
+            score += 8
 
-    _skills_cache = data.get("skills", [])
-    _last_mtime = mtime
-    return _skills_cache
-
-
-def find_matching_skills(question_text, max_matches=2):
-    """
-    Busca qué entradas del YAML aplican a la pregunta, comparando keywords.
-    Devuelve una lista de dicts de skill que coinciden.
-    """
-    skills = _load_raw_skills()
-    text_lower = question_text.lower()
-
-    matches = []
-    for skill in skills:
         keywords = skill.get("keywords", [])
-        if any(kw.lower() in text_lower for kw in keywords):
-            matches.append(skill)
-        if len(matches) >= max_matches:
-            break
+        if not isinstance(keywords, list):
+            keywords = []
 
-    return matches
+        for keyword in keywords:
+            normalized_keyword = _normalize(keyword)
+            if not normalized_keyword:
+                continue
+            if normalized_keyword in normalized_question:
+                # Longer phrases are more specific than one-word matches.
+                score += 2 + min(5, len(normalized_keyword.split()))
+
+        if score > 0:
+            scored.append((score, -index, skill))
+
+    scored.sort(
+        key=lambda item: (item[0], item[1]),
+        reverse=True,
+    )
+    return [
+        skill
+        for _, _, skill in scored[: max(1, max_matches)]
+    ]
 
 
-def build_context_block(question_text, language_mode="en"):
-    """
-    Arma un bloque de texto con la info relevante del YAML para inyectar
-    como contexto real en el prompt del asistente.
-    """
-    matches = find_matching_skills(question_text)
+def _language_value(
+    item: dict[str, Any],
+    field: str,
+    language_mode: str,
+) -> str:
+    suffix = "es" if language_mode == "es" else "en"
+    value = item.get(f"{field}_{suffix}", "")
+    return " ".join(str(value).strip().split())
+
+
+def build_context_block(
+    question_text: str,
+    language_mode: str = "en",
+    max_matches: int = 3,
+) -> str:
+    """Build a compact profile block for GPT, or "" when nothing matches."""
+    profile, _ = _load_document()
+    matches = find_matching_skills(
+        question_text,
+        max_matches=max_matches,
+    )
     if not matches:
         return ""
 
-    lines = []
+    language_mode = "es" if language_mode == "es" else "en"
+    lines: list[str] = []
+
+    profile_name = str(
+        profile.get("name", "Senior Software Developer")
+    ).strip()
+    if profile_name:
+        lines.append(f"Profile: {profile_name}")
+
     for skill in matches:
-        topic = skill.get("topic", "")
-        years = skill.get("experience_years", "")
-        is_strong = skill.get("is_strong_area", False)
-        tools = skill.get("tools_used", [])
+        topic = str(skill.get("topic", "")).strip()
+        summary = _language_value(
+            skill,
+            "summary",
+            language_mode,
+        )
+        guidance = _language_value(
+            skill,
+            "answer_guidance",
+            language_mode,
+        )
 
-        if language_mode == "en":
-            summary = skill.get("summary_en", "")
-            example = skill.get("recent_production_example_en") or skill.get("recent_incident_en", "")
-            strong_text = "Yes, this is one of my strongest areas." if is_strong else ""
-        else:
-            summary = skill.get("summary_es", "")
-            example = skill.get("recent_production_example_es") or skill.get("recent_incident_es", "")
-            strong_text = "Sí, es una de mis áreas más fuertes." if is_strong else ""
+        tools = skill.get("tools", [])
+        if not isinstance(tools, list):
+            tools = []
+        tool_text = ", ".join(
+            str(tool).strip()
+            for tool in tools
+            if str(tool).strip()
+        )
 
-        block = f"[{topic}]"
-        if years:
-            block += f" Experiencia: {years}."
-        if strong_text:
-            block += f" {strong_text}"
+        parts = [f"[{topic}]" if topic else "[Relevant skill]"]
         if summary:
-            block += f" {summary}"
-        if tools:
-            block += f" Herramientas: {', '.join(tools)}."
-        if example:
-            block += f" Ejemplo reciente: {example}"
+            parts.append(summary)
+        if tool_text:
+            parts.append(f"Tools/technologies: {tool_text}.")
+        if guidance:
+            parts.append(f"Response guidance: {guidance}")
 
-        lines.append(block)
+        lines.append(" ".join(parts))
 
     header = (
-        "Real background information to use as ground truth when answering "
-        "(do not just repeat it verbatim, phrase it naturally as your own answer):"
-        if language_mode == "en"
-        else
-        "Información real de mi experiencia para usar como base al responder "
-        "(no la repitas textual, formúlala de forma natural como tu propia respuesta):"
+        "Relevant senior-developer profile context. Use it only when it "
+        "actually helps answer the question. Treat it as background guidance, "
+        "not permission to invent employers, project names, dates, metrics, "
+        "incidents, or personal achievements that are not explicitly present."
     )
-
     return header + "\n" + "\n".join(lines)
