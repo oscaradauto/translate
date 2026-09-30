@@ -795,6 +795,9 @@ class AssistantTab(QWidget):
         self._pending_answer_buffer = ""
         self._answer_stream_started = False
         self._current_answer_is_coding = False
+        self._dynamic_base_window_height: int | None = None
+        self._dynamic_base_answer_height: int | None = None
+        self._dynamic_base_transcript_height: int | None = None
         self._understood_question_text = ""
         self._pending_understood_question = ""
         self._pending_understood_topic = ""
@@ -1717,14 +1720,84 @@ class AssistantTab(QWidget):
             "Waiting for the question to finish..."
         )
 
+    def _capture_dynamic_layout_baseline(self) -> None:
+        if self._dynamic_base_window_height is not None:
+            return
+
+        window = self.window()
+        self._dynamic_base_window_height = window.height()
+        self._dynamic_base_answer_height = max(
+            135,
+            self.answer_view.height(),
+        )
+        self._dynamic_base_transcript_height = max(
+            155,
+            self.transcript_view.height(),
+        )
+
+    def _keep_window_on_current_screen(self) -> None:
+        window = self.window()
+        screen = QApplication.screenAt(
+            window.frameGeometry().center()
+        )
+        if screen is None:
+            screen = window.screen()
+        if screen is None:
+            return
+
+        available = screen.availableGeometry()
+        frame = window.frameGeometry()
+
+        new_x = window.x()
+        new_y = window.y()
+
+        if frame.right() > available.right():
+            new_x = max(
+                available.left(),
+                available.right() - window.width() + 1,
+            )
+        if frame.bottom() > available.bottom():
+            new_y = max(
+                available.top(),
+                available.bottom() - window.height() + 1,
+            )
+        if frame.left() < available.left():
+            new_x = available.left()
+        if frame.top() < available.top():
+            new_y = available.top()
+
+        if new_x != window.x() or new_y != window.y():
+            window.move(new_x, new_y)
+
     def _reset_answer_panel_layout(self) -> None:
         self.transcript_view.setMinimumHeight(155)
         self.transcript_view.setMaximumHeight(16777215)
         self.answer_view.setMinimumHeight(135)
         self.answer_view.setMaximumHeight(16777215)
 
+        base_height = self._dynamic_base_window_height
+        if base_height is not None:
+            window = self.window()
+            target_height = max(
+                window.minimumHeight(),
+                base_height,
+            )
+            if window.height() != target_height:
+                window.resize(
+                    window.width(),
+                    target_height,
+                )
+            self._keep_window_on_current_screen()
+
+        self._dynamic_base_window_height = None
+        self._dynamic_base_answer_height = None
+        self._dynamic_base_transcript_height = None
+
     def _prepare_coding_layout(self) -> None:
-        # Give code priority over transcript history while preserving both.
+        # Snapshot the normal layout once, then let every coding answer size
+        # itself relative to that same baseline until we return to Technical.
+        self._capture_dynamic_layout_baseline()
+
         self.transcript_view.setMinimumHeight(105)
         self.transcript_view.setMaximumHeight(165)
         self.answer_view.setMinimumHeight(210)
@@ -1754,42 +1827,66 @@ class AssistantTab(QWidget):
                 min(560, int(available.height() * 0.58)),
             )
             max_window_height = max(
-                520,
+                window.minimumHeight(),
                 available.height() - 24,
             )
         else:
-            available = None
             max_answer_height = 520
             max_window_height = 900
 
-        target_height = max(
+        target_answer_height = max(
             210,
             min(content_height, max_answer_height),
         )
+        self.answer_view.setMinimumHeight(target_answer_height)
+        self.answer_view.setMaximumHeight(target_answer_height)
 
-        current_answer_height = self.answer_view.height()
-        self.answer_view.setMinimumHeight(target_height)
-        self.answer_view.setMaximumHeight(target_height)
-
-        grow_by = max(
-            0,
-            target_height - current_answer_height,
+        base_window_height = (
+            self._dynamic_base_window_height
+            or window.height()
         )
-        if grow_by:
-            new_height = min(
-                max_window_height,
-                window.height() + grow_by,
-            )
-            window.resize(window.width(), new_height)
+        base_answer_height = (
+            self._dynamic_base_answer_height
+            or 135
+        )
+        base_transcript_height = (
+            self._dynamic_base_transcript_height
+            or 155
+        )
 
-        if available is not None:
-            frame = window.frameGeometry()
-            if frame.bottom() > available.bottom():
-                new_y = max(
-                    available.top(),
-                    available.bottom() - window.height() + 1,
-                )
-                window.move(window.x(), new_y)
+        # Shrinking Conversation to 165px gives some of its previous space to
+        # the code panel before the top-level window needs to grow.
+        transcript_space_freed = max(
+            0,
+            base_transcript_height - 165,
+        )
+        answer_capacity_at_base_size = (
+            base_answer_height + transcript_space_freed
+        )
+
+        extra_height_needed = max(
+            0,
+            target_answer_height - answer_capacity_at_base_size,
+        )
+        target_window_height = min(
+            max_window_height,
+            base_window_height + extra_height_needed,
+        )
+        target_window_height = max(
+            window.minimumHeight(),
+            target_window_height,
+        )
+
+        # Resize in both directions. This is what makes consecutive coding
+        # answers dynamic: a large solution can grow the window, while the
+        # next short solution shrinks it again to the baseline.
+        if window.height() != target_window_height:
+            window.resize(
+                window.width(),
+                target_window_height,
+            )
+
+        self._keep_window_on_current_screen()
 
     def _on_answer_queued(self, _text: str) -> None:
         # Keep the current answer visible while the newest question waits for
