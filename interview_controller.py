@@ -65,11 +65,17 @@ class InterviewController:
         self._question_timer: threading.Timer | None = None
 
         self._answer_lock = threading.Lock()
+        self._queued_answer_text = ""
+        self._queued_answer_speaker = ""
+        self._queued_answer_force = False
         self._last_interviewer_text = ""
         self._last_turn_text = ""
         self._last_turn_speaker = ""
         self._last_question = ""
         self._last_answer = ""
+        self._queued_answer_text = ""
+        self._queued_answer_speaker = ""
+        self._queued_answer_force = False
         self._coding_context = CodingContext(
             language=INTERVIEW_CODE_LANGUAGE
         )
@@ -156,6 +162,9 @@ class InterviewController:
             self._question_timer = None
             self._pending_response_parts.clear()
             self._pending_response_speaker = ""
+            self._queued_answer_text = ""
+            self._queued_answer_speaker = ""
+            self._queued_answer_force = False
 
         if timer is not None:
             timer.cancel()
@@ -451,10 +460,15 @@ class InterviewController:
             return
 
         if not self._answer_lock.acquire(blocking=False):
-            self._emit(
-                "on_assistant_error",
-                "El asistente todavía está generando la respuesta anterior.",
-            )
+            # Never drop a new interview question just because the previous
+            # answer is still streaming. Keep only the latest pending request
+            # so the assistant catches up instead of generating stale backlog.
+            with self._pending_lock:
+                self._queued_answer_text = question.strip()
+                self._queued_answer_speaker = speaker
+                self._queued_answer_force = force
+
+            self._emit("on_answer_queued", question.strip())
             return
 
         recent_turns = list(self._turns)
@@ -469,6 +483,24 @@ class InterviewController:
             daemon=True,
         )
         thread.start()
+
+    def _dispatch_queued_answer(self) -> None:
+        with self._pending_lock:
+            question = self._queued_answer_text
+            speaker = self._queued_answer_speaker
+            force = self._queued_answer_force
+            self._queued_answer_text = ""
+            self._queued_answer_speaker = ""
+            self._queued_answer_force = False
+
+        if not question or not self.running:
+            return
+
+        self._start_answer(
+            question,
+            force=force,
+            speaker=speaker,
+        )
 
     def _update_coding_context(
         self,
@@ -680,6 +712,7 @@ class InterviewController:
             )
         finally:
             self._answer_lock.release()
+            self._dispatch_queued_answer()
 
     def _emit(self, name: str, *args) -> None:
         callback = self.callbacks.get(name)
