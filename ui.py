@@ -2616,6 +2616,32 @@ class SettingsTab(QWidget):
         layout.setSpacing(11)
         return card, layout
 
+    def _shortcut_editor(self, name: str) -> QKeySequenceEdit:
+        editor = QKeySequenceEdit(
+            self.assistant_tab.shortcut_sequence(name)
+        )
+        editor.setMaximumSequenceLength(1)
+        editor.setMinimumWidth(180)
+        editor.setStyleSheet(
+            f"""
+            QKeySequenceEdit {{
+                background-color: rgba(255,255,255,15);
+                color: {TEXT};
+                border: 1px solid rgba(255,255,255,25);
+                border-radius: 8px;
+                padding: 6px 9px;
+            }}
+            """
+        )
+        editor.keySequenceChanged.connect(
+            lambda sequence, shortcut_name=name:
+            self.assistant_tab.set_shortcut_sequence(
+                shortcut_name,
+                sequence,
+            )
+        )
+        return editor
+
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 18, 22, 18)
@@ -2668,6 +2694,33 @@ class SettingsTab(QWidget):
             )
         )
         root.addWidget(interview_card)
+
+        shortcuts_card, shortcuts = self._card()
+        shortcuts.addWidget(self._section_title("Keyboard shortcuts"))
+
+        shortcut_rows = (
+            ("Responder último", "answer_last"),
+            ("Regenerar", "regenerate"),
+            ("Copiar respuesta", "copy_answer"),
+            ("Copiar código", "copy_code"),
+        )
+
+        for label_text, shortcut_name in shortcut_rows:
+            row = QHBoxLayout()
+            row.addWidget(self._row_label(label_text))
+            row.addWidget(
+                self._shortcut_editor(shortcut_name)
+            )
+            row.addStretch()
+            shortcuts.addLayout(row)
+
+        shortcuts.addWidget(
+            self._hint(
+                "Los atajos solo actúan dentro de la pestaña Asistente y se "
+                "guardan automáticamente para la próxima ejecución."
+            )
+        )
+        root.addWidget(shortcuts_card)
 
         privacy_card, privacy = self._card()
         privacy.addWidget(self._section_title("Privacy & screen sharing"))
