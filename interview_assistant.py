@@ -295,12 +295,12 @@ class GroqInterviewAssistant:
 
         explicit = (
             is_implementation
-            and has_operation
+            and (has_operation or has_reference)
             and not looks_incomplete
         )
         return (
             explicit,
-            explicit and not has_reference,
+            explicit and has_operation and not has_reference,
         )
 
     def analyze_turn(
