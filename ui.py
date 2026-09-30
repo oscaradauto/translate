@@ -704,6 +704,8 @@ class AssistantTab(QWidget):
         self._transcript_order: list[tuple[str, int]] = []
         self._max_transcript_entries = 30
         self._answer_buffer = ""
+        self._has_any_turn = False
+        self._has_interviewer_turn = False
 
         self._build_ui()
         self._connect_signals()
@@ -743,6 +745,42 @@ class AssistantTab(QWidget):
         )
         input_label.setStyleSheet(
             f"color: {MUTED}; font-size: 11px; background: transparent;"
+        )
+
+        response_scope_label = QLabel("Responder a:")
+        response_scope_label.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px; background: transparent;"
+        )
+
+        self.response_scope_combo = QComboBox()
+        self.response_scope_combo.addItem(
+            "Entrevistador",
+            "interviewer",
+        )
+        self.response_scope_combo.addItem("Ambos", "both")
+        self.response_scope_combo.setMinimumWidth(118)
+        self.response_scope_combo.setToolTip(
+            "Entrevistador: solo las preguntas del entrevistador generan "
+            "respuestas. Ambos: YOU e INTERVIEWER pueden generarlas."
+        )
+        self.response_scope_combo.setStyleSheet(
+            f"""
+            QComboBox {{
+                background-color: rgba(255,255,255,15);
+                color: {TEXT};
+                border: 1px solid rgba(255,255,255,25);
+                border-radius: 8px;
+                padding: 5px 9px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {CARD_BG_SOFT};
+                color: {TEXT};
+                selection-background-color: {BLUE};
+            }}
+            """
+        )
+        self.response_scope_combo.currentIndexChanged.connect(
+            self._on_response_scope_changed
         )
 
         language_label = QLabel("Answer:")
@@ -788,6 +826,9 @@ class AssistantTab(QWidget):
         header.addWidget(self.status_label)
         header.addStretch()
         header.addWidget(input_label)
+        header.addSpacing(6)
+        header.addWidget(response_scope_label)
+        header.addWidget(self.response_scope_combo)
         header.addSpacing(6)
         header.addWidget(language_label)
         header.addWidget(self.language_combo)
@@ -1052,9 +1093,14 @@ class AssistantTab(QWidget):
         from interview_controller import InterviewController
 
         language = self.language_combo.currentData() or "en"
+        response_scope = (
+            self.response_scope_combo.currentData()
+            or "interviewer"
+        )
         self.controller = InterviewController(
             callbacks=callbacks,
             language=language,
+            response_scope=response_scope,
         )
 
         threading.Thread(
@@ -1089,6 +1135,8 @@ class AssistantTab(QWidget):
         self._transcript_entries.clear()
         self._transcript_order.clear()
         self._answer_buffer = ""
+        self._has_any_turn = False
+        self._has_interviewer_turn = False
 
         self.transcript_view.setPlainText(
             "Listening for YOU and INTERVIEWER..."
@@ -1110,6 +1158,29 @@ class AssistantTab(QWidget):
 
         language = self.language_combo.currentData() or "en"
         controller.set_language(language)
+
+    def _on_response_scope_changed(self, _index: int = -1) -> None:
+        scope = (
+            self.response_scope_combo.currentData()
+            or "interviewer"
+        )
+
+        if self.controller is not None:
+            self.controller.set_response_scope(scope)
+
+        self._refresh_answer_last_button()
+
+    def _refresh_answer_last_button(self) -> None:
+        scope = (
+            self.response_scope_combo.currentData()
+            or "interviewer"
+        )
+        if scope == "both":
+            enabled = self._has_any_turn
+        else:
+            enabled = self._has_interviewer_turn
+
+        self.answer_last_button.setEnabled(enabled)
 
     def _update_transcript(
         self,
@@ -1174,9 +1245,11 @@ class AssistantTab(QWidget):
             partial=False,
         )
 
-        # Manual fallback is also useful for solo testing: if the only
-        # available utterance is YOU, InterviewController can answer it.
-        self.answer_last_button.setEnabled(True)
+        self._has_any_turn = True
+        if speaker == "INTERVIEWER":
+            self._has_interviewer_turn = True
+
+        self._refresh_answer_last_button()
 
     def _on_transcript_rejected(
         self,
