@@ -40,9 +40,30 @@ SUBTITLE_PARTIAL_MIN_SECONDS = float(
 WHISPER_PARTIAL_WINDOW_SECONDS = float(
     os.getenv("WHISPER_PARTIAL_WINDOW_SECONDS", "4.0")
 )
+# Generic defaults kept for shared capture components. Stage 1 overrides them
+# per source below; Stage 2 already supplies its own interview-specific values.
 SUBTITLE_SPEECH_END_MS = int(os.getenv("SUBTITLE_SPEECH_END_MS", "700"))
 SUBTITLE_MAX_UTTERANCE_SECONDS = float(
     os.getenv("SUBTITLE_MAX_UTTERANCE_SECONDS", "8")
+)
+
+# Stage 1 source-specific segmentation.
+# YOU gets a slightly longer silence tolerance because natural pauses while
+# speaking English were being split into many tiny captions. MEETING keeps a
+# tighter silence boundary so remote turn changes are still separated when a
+# real pause exists. Longer hard caps reduce arbitrary 8-second sentence cuts
+# while rolling partial captions remain available in real time.
+MIC_SUBTITLE_SPEECH_END_MS = int(
+    os.getenv("MIC_SUBTITLE_SPEECH_END_MS", "950")
+)
+MEETING_SUBTITLE_SPEECH_END_MS = int(
+    os.getenv("MEETING_SUBTITLE_SPEECH_END_MS", "700")
+)
+MIC_SUBTITLE_MAX_UTTERANCE_SECONDS = float(
+    os.getenv("MIC_SUBTITLE_MAX_UTTERANCE_SECONDS", "14")
+)
+MEETING_SUBTITLE_MAX_UTTERANCE_SECONDS = float(
+    os.getenv("MEETING_SUBTITLE_MAX_UTTERANCE_SECONDS", "12")
 )
 
 # False-positive protection. The physical microphone is intentionally more
@@ -74,11 +95,17 @@ WHISPER_INITIAL_PROMPT = os.getenv(
     "WHISPER_INITIAL_PROMPT",
     (
         "English software engineering team meeting. "
-        "Technical vocabulary may include Java, Spring Boot, Kafka, Azure, "
-        "Azure Functions, GraphQL, REST APIs, GitHub, Jira, JQL, MXL, PDP, PLP, "
-        "AEM, APAC, Q1, Q3, Q4, pull request, deployment, latency, cold start, "
-        "circuit breaker, timeout, performance testing, load testing, schema, "
-        "endpoint, getCart, observability and tracing."
+        "Technical vocabulary may include ADR, ADRs, Architecture Decision "
+        "Record, architecture decision records, sensible defaults, Java, "
+        "Spring Boot, Kafka, Azure, Azure Functions, GraphQL, REST APIs, SDK, "
+        "SDKs, API, APIs, GitHub, pull request, PR, repository, repositories, "
+        "Jira, JQL, MXL, PDP, PLP, AEM, APAC, iOS, Android, DRY principle, "
+        "Tailwind, Tailwind CSS, Sass, SCSS, Lottie, SVG, Postman, Confluence, "
+        "MCP, serverless, coding agents, Q1, Q3, Q4, deployment, latency, "
+        "cold start, circuit breaker, timeout, cache validation, state "
+        "management, memory management, garbage collection, authentication, "
+        "OAuth, performance testing, load testing, schema, endpoint, getCart, "
+        "observability and tracing."
     ),
 )
 

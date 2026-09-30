@@ -478,9 +478,26 @@ class SubtitleTab(QWidget):
             ),
         }
 
+        from config import (
+            MEETING_SUBTITLE_MAX_UTTERANCE_SECONDS,
+            MEETING_SUBTITLE_SPEECH_END_MS,
+            MIC_SUBTITLE_MAX_UTTERANCE_SECONDS,
+            MIC_SUBTITLE_SPEECH_END_MS,
+        )
         from vad_detector import ListenerController
 
-        self.controller = ListenerController(callbacks)
+        self.controller = ListenerController(
+            callbacks,
+            mic_speech_end_ms=MIC_SUBTITLE_SPEECH_END_MS,
+            meeting_speech_end_ms=MEETING_SUBTITLE_SPEECH_END_MS,
+            mic_max_utterance_seconds=(
+                MIC_SUBTITLE_MAX_UTTERANCE_SECONDS
+            ),
+            meeting_max_utterance_seconds=(
+                MEETING_SUBTITLE_MAX_UTTERANCE_SECONDS
+            ),
+            suppress_repetition_loops=True,
+        )
 
         threading.Thread(
             target=self.controller.start,
@@ -695,11 +712,6 @@ class SubtitleTab(QWidget):
         dialog.exec()
 
     def _on_status_changed(self, text: str) -> None:
-        if text.startswith("Groq STT listo"):
-            self._set_health(groq="✓")
-            self.status_label.setText("Loading")
-            return
-
         loading = (
             text.startswith("Cargando")
             or text.startswith("Preparando")

@@ -23,11 +23,15 @@ from config import (
     LOCAL_SPEECH_GATE_HOLD_MS,
     MEETING_MIN_VOICED_MS,
     MEETING_SPEECH_START_MS,
+    MEETING_SUBTITLE_MAX_UTTERANCE_SECONDS,
+    MEETING_SUBTITLE_SPEECH_END_MS,
     MEETING_VAD_MODE,
     MIC_DEVICE_INDEX,
     MIC_MIN_DBFS,
     MIC_MIN_VOICED_MS,
     MIC_SPEECH_START_MS,
+    MIC_SUBTITLE_MAX_UTTERANCE_SECONDS,
+    MIC_SUBTITLE_SPEECH_END_MS,
     MIC_VAD_MODE,
     SUBTITLE_MAX_UTTERANCE_SECONDS,
     SUBTITLE_PARTIAL_INTERVAL_SECONDS,
@@ -581,6 +585,11 @@ class ListenerController:
         max_utterance_seconds: float = SUBTITLE_MAX_UTTERANCE_SECONDS,
         partials_enabled: bool = True,
         engine_label: str = "Faster-Whisper local",
+        mic_speech_end_ms: int | None = None,
+        meeting_speech_end_ms: int | None = None,
+        mic_max_utterance_seconds: float | None = None,
+        meeting_max_utterance_seconds: float | None = None,
+        suppress_repetition_loops: bool = False,
     ):
         self.callbacks = callbacks
         self.mic_device = mic_device
@@ -592,6 +601,27 @@ class ListenerController:
         self.max_utterance_seconds = max_utterance_seconds
         self.partials_enabled = partials_enabled
         self.engine_label = engine_label
+        self.mic_speech_end_ms = (
+            speech_end_ms
+            if mic_speech_end_ms is None
+            else mic_speech_end_ms
+        )
+        self.meeting_speech_end_ms = (
+            speech_end_ms
+            if meeting_speech_end_ms is None
+            else meeting_speech_end_ms
+        )
+        self.mic_max_utterance_seconds = (
+            max_utterance_seconds
+            if mic_max_utterance_seconds is None
+            else mic_max_utterance_seconds
+        )
+        self.meeting_max_utterance_seconds = (
+            max_utterance_seconds
+            if meeting_max_utterance_seconds is None
+            else meeting_max_utterance_seconds
+        )
+        self.suppress_repetition_loops = suppress_repetition_loops
 
         self.running = False
         self.mic_streamer: LocalMicStreamer | None = None
@@ -682,6 +712,9 @@ class ListenerController:
                     model_name=self.whisper_model,
                     language=self.transcription_language,
                     initial_prompt=self.initial_prompt,
+                    suppress_repetition_loops=(
+                        self.suppress_repetition_loops
+                    ),
                 )
 
             self.transcriber.start()
@@ -702,8 +735,8 @@ class ListenerController:
                 self._next_segment_id,
                 self._local_speech_gate,
                 self._on_capture_error,
-                speech_end_ms=self.speech_end_ms,
-                max_utterance_seconds=self.max_utterance_seconds,
+                speech_end_ms=self.mic_speech_end_ms,
+                max_utterance_seconds=self.mic_max_utterance_seconds,
                 partials_enabled=self.partials_enabled,
             )
             self.mic_streamer.start()
@@ -718,8 +751,8 @@ class ListenerController:
                 self._next_segment_id,
                 self._local_speech_gate,
                 self._on_capture_error,
-                speech_end_ms=self.speech_end_ms,
-                max_utterance_seconds=self.max_utterance_seconds,
+                speech_end_ms=self.meeting_speech_end_ms,
+                max_utterance_seconds=self.meeting_max_utterance_seconds,
                 partials_enabled=self.partials_enabled,
             )
             self.loopback_streamer.start()
