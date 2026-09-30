@@ -73,9 +73,6 @@ class InterviewController:
         self._last_turn_speaker = ""
         self._last_question = ""
         self._last_answer = ""
-        self._queued_answer_text = ""
-        self._queued_answer_speaker = ""
-        self._queued_answer_force = False
         self._coding_context = CodingContext(
             language=INTERVIEW_CODE_LANGUAGE
         )
@@ -102,6 +99,9 @@ class InterviewController:
         self._last_turn_speaker = ""
         self._last_question = ""
         self._last_answer = ""
+        self._queued_answer_text = ""
+        self._queued_answer_speaker = ""
+        self._queued_answer_force = False
         self._coding_context = CodingContext(
             language=INTERVIEW_CODE_LANGUAGE
         )
