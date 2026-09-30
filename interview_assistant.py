@@ -1,22 +1,21 @@
-"""OpenAI answer engine for Stage 2 technical interviews.
+"""Groq answer engine for Stage 2 technical interviews.
 
-Stage 2 intentionally keeps transcription local. This module only sends the
-resolved technical question plus a short recent conversation window to OpenAI.
+Transcription remains local with Faster-Whisper. Only text from the recent
+interview context is sent to Groq when a candidate interviewer turn is ready.
 """
 
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
-from openai import OpenAI
+from groq import Groq
 
 from config import (
-    ASSISTANT_MAX_OUTPUT_TOKENS,
-    ASSISTANT_REASONING_EFFORT,
-    OPENAI_ASSISTANT_MODEL,
+    GROQ_MAX_COMPLETION_TOKENS,
+    GROQ_MODEL,
+    GROQ_REASONING_EFFORT,
 )
 
 DeltaCallback = Callable[[str], None]
@@ -26,61 +25,32 @@ SYSTEM_PROMPT_EN = """You are a senior software engineer helping during a live t
 Answer in natural spoken English. Be direct, technically precise, concise, and easy to say aloud.
 Do not start with filler such as 'Great question', 'Sure', or 'Absolutely'.
 Prefer 2-4 short sentences for conceptual questions.
-For architecture/design questions, give the main approach, the key trade-off, and one practical detail.
-For coding questions, keep code very small unless the interviewer explicitly asks for a full implementation.
-Use the supplied conversation context to resolve follow-up questions and pronouns.
-Do not claim personal experience, employers, incidents, metrics, or projects that were not supplied in the conversation.
-If the transcription appears to contain a minor technical-term error, infer the most plausible software term from context without discussing the transcription error.
+For architecture or system-design questions, give the main approach, the key trade-off, and one practical detail.
+For coding questions, explain the approach first and keep code very small unless the interviewer explicitly asks for a full implementation.
+Use the recent conversation context to resolve follow-up questions and pronouns.
+Do not invent personal experience, employers, incidents, metrics, or projects.
+If the transcription contains a likely minor technical-term error, infer the most plausible software term from context without discussing the transcription error.
 Return only the answer the interviewee could say aloud."""
 
 SYSTEM_PROMPT_ES = """Eres un desarrollador senior ayudando durante una entrevista técnica en vivo.
 Responde en español natural, hablado, directo, técnicamente preciso, breve y fácil de decir en voz alta.
 No empieces con relleno como 'Buena pregunta', 'Claro' o 'Por supuesto'.
 Para preguntas conceptuales usa normalmente 2-4 frases cortas.
-Para arquitectura o diseño da el enfoque principal, el trade-off clave y un detalle práctico.
-Para preguntas de código, mantén el código muy corto salvo que el entrevistador pida explícitamente una implementación completa.
-Usa el contexto de conversación para resolver preguntas de seguimiento y pronombres.
-No inventes experiencia personal, empleadores, incidentes, métricas ni proyectos que no aparezcan en el contexto.
-Si la transcripción parece contener un pequeño error en un término técnico, infiere el término de software más probable por contexto sin hablar del error de transcripción.
+Para arquitectura o system design da el enfoque principal, el trade-off clave y un detalle práctico.
+Para preguntas de código explica primero el enfoque y mantén el código muy corto salvo que el entrevistador pida una implementación completa.
+Usa el contexto reciente para resolver preguntas de seguimiento y pronombres.
+No inventes experiencia personal, empleadores, incidentes, métricas ni proyectos.
+Si la transcripción contiene un pequeño error probable en un término técnico, infiere el término de software más plausible por contexto sin hablar del error de transcripción.
 Devuelve únicamente la respuesta que el entrevistado podría decir en voz alta."""
 
+ROUTER_PROMPT = """Decide whether the latest interviewer turn requires a technical software-engineering answer.
+Return exactly ANSWER or IGNORE, with no punctuation or explanation.
 
-QUESTION_STARTERS = (
-    "what", "how", "why", "when", "where", "which", "who",
-    "can you", "could you", "would you", "do you", "did you",
-    "have you", "are you", "is there", "are there", "should",
-    "tell me", "explain", "walk me through", "describe",
-    "what's", "whats", "how's", "hows",
-)
+ANSWER for questions or requests about programming, Java, Spring, APIs, microservices, databases, SQL, NoSQL, Kafka, cloud, DevOps, CI/CD, testing, security, concurrency, data structures, algorithms, debugging, architecture, system design, performance, coding, or concrete technical experience.
 
+IGNORE for greetings, thanks, scheduling, salary, availability, introductions, generic small talk, or purely behavioral/non-technical prompts such as 'tell me about yourself'.
 
-def looks_like_question(text: str) -> bool:
-    """Fast local filter so ordinary interview chatter does not call OpenAI."""
-    cleaned = " ".join(text.strip().split())
-    if not cleaned:
-        return False
-
-    lower = cleaned.casefold()
-
-    if "?" in cleaned:
-        return True
-
-    if any(lower.startswith(prefix) for prefix in QUESTION_STARTERS):
-        return True
-
-    # Common interview-style requests that may be transcribed without a
-    # question mark.
-    patterns = (
-        r"\bdifference between\b",
-        r"\bcompare\b",
-        r"\bpros and cons\b",
-        r"\btrade[- ]?offs?\b",
-        r"\bwhen would you\b",
-        r"\bwhat would you\b",
-        r"\bhow would you\b",
-        r"\bwhy would you\b",
-    )
-    return any(re.search(pattern, lower) for pattern in patterns)
+Use the recent interview context when the latest turn is a follow-up like 'why?', 'what about failures?', or 'and how would you scale it?'."""
 
 
 @dataclass(frozen=True)
@@ -89,22 +59,61 @@ class ConversationTurn:
     text: str
 
 
-class OpenAIInterviewAssistant:
-    """Small, synchronous OpenAI Responses API wrapper."""
+class GroqInterviewAssistant:
+    """Groq GPT-OSS wrapper with routing and streaming answers."""
 
     def __init__(self) -> None:
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        api_key = os.getenv("GROQ_API_KEY", "").strip()
         if not api_key:
             raise RuntimeError(
-                "OPENAI_API_KEY no está configurada en el archivo .env."
+                "GROQ_API_KEY no está configurada en el archivo .env."
             )
 
-        self.client = OpenAI(
-            api_key=api_key,
-            timeout=30.0,
-            max_retries=1,
+        self.client = Groq(api_key=api_key)
+        self.model = GROQ_MODEL
+
+    @staticmethod
+    def _context_text(
+        recent_turns: Iterable[ConversationTurn],
+    ) -> str:
+        lines: list[str] = []
+        for turn in recent_turns:
+            label = (
+                "Interviewer"
+                if turn.speaker == "INTERVIEWER"
+                else "You"
+            )
+            lines.append(f"{label}: {turn.text}")
+        return "\n".join(lines[-12:])
+
+    def should_answer(
+        self,
+        question: str,
+        recent_turns: Iterable[ConversationTurn],
+    ) -> bool:
+        context = self._context_text(recent_turns)
+        completion = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": ROUTER_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Recent interview conversation:\n{context}\n\n"
+                        f"Latest interviewer turn:\n{question}"
+                    ),
+                },
+            ],
+            reasoning_effort="low",
+            include_reasoning=False,
+            max_completion_tokens=8,
+            temperature=0.0,
         )
-        self.model = OPENAI_ASSISTANT_MODEL
+
+        text = (
+            completion.choices[0].message.content or ""
+        ).strip().upper()
+        return text.startswith("ANSWER")
 
     def stream_answer(
         self,
@@ -118,54 +127,41 @@ class OpenAIInterviewAssistant:
             if language == "es"
             else SYSTEM_PROMPT_EN
         )
+        context = self._context_text(recent_turns)
 
-        context_lines = []
-        for turn in recent_turns:
-            label = "Interviewer" if turn.speaker == "INTERVIEWER" else "You"
-            context_lines.append(f"{label}: {turn.text}")
-
-        context = "\n".join(context_lines[-12:])
-        prompt = (
-            "Recent interview conversation:\n"
-            f"{context}\n\n"
-            "Latest interviewer question:\n"
-            f"{question}\n\n"
-            "Answer the latest question using the recent conversation only as context."
+        stream = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": instructions},
+                {
+                    "role": "user",
+                    "content": (
+                        "Recent interview conversation:\n"
+                        f"{context}\n\n"
+                        "Latest interviewer question:\n"
+                        f"{question}\n\n"
+                        "Answer the latest question. Use the recent "
+                        "conversation only as context."
+                    ),
+                },
+            ],
+            reasoning_effort=GROQ_REASONING_EFFORT,
+            include_reasoning=False,
+            max_completion_tokens=GROQ_MAX_COMPLETION_TOKENS,
+            temperature=0.25,
+            stream=True,
         )
 
         collected: list[str] = []
+        for chunk in stream:
+            if not chunk.choices:
+                continue
 
-        # Responses streaming keeps perceived latency low: text can appear in
-        # the UI as soon as the first output token is available.
-        try:
-            with self.client.responses.stream(
-                model=self.model,
-                instructions=instructions,
-                input=prompt,
-                reasoning={"effort": ASSISTANT_REASONING_EFFORT},
-                max_output_tokens=ASSISTANT_MAX_OUTPUT_TOKENS,
-            ) as stream:
-                for event in stream:
-                    if event.type == "response.output_text.delta":
-                        delta = event.delta or ""
-                        if delta:
-                            collected.append(delta)
-                            on_delta(delta)
+            delta = chunk.choices[0].delta.content or ""
+            if not delta:
+                continue
 
-                stream.get_final_response()
+            collected.append(delta)
+            on_delta(delta)
 
-            return "".join(collected).strip()
-        except Exception:
-            # Compatibility fallback for SDKs/environments where streaming is
-            # unavailable. The UI still receives one complete delta.
-            response = self.client.responses.create(
-                model=self.model,
-                instructions=instructions,
-                input=prompt,
-                reasoning={"effort": ASSISTANT_REASONING_EFFORT},
-                max_output_tokens=ASSISTANT_MAX_OUTPUT_TOKENS,
-            )
-            text = (response.output_text or "").strip()
-            if text:
-                on_delta(text)
-            return text
+        return "".join(collected).strip()
