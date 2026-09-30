@@ -375,7 +375,7 @@ class SubtitleTab(QWidget):
 
         self.start_button.setEnabled(False)
         self.start_button.setText("⏳ Cargando...")
-        self._on_status_changed("Preparando audio...")
+        self._on_status_changed("Cargando modelo local...")
 
         callbacks = {
             "on_status": lambda text: self.bridge.status_changed.emit(text),
@@ -978,7 +978,7 @@ class AssistantTab(QWidget):
 
         self.interview_button.setEnabled(False)
         self.interview_button.setText("⏳ Cargando...")
-        self._on_status_changed("Cargando modelo local...")
+        self._on_status_changed("Preparando audio...")
 
         callbacks = {
             "on_status": (
