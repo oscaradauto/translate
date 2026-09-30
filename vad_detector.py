@@ -34,6 +34,8 @@ from config import (
     SUBTITLE_PARTIAL_MIN_SECONDS,
     SUBTITLE_SPEECH_END_MS,
     WHISPER_PARTIAL_WINDOW_SECONDS,
+    WHISPER_INITIAL_PROMPT,
+    WHISPER_MODEL,
 )
 from local_transcriber import LocalWhisperTranscriber
 
@@ -540,11 +542,21 @@ class LocalSystemAudioStreamer:
 
 
 class ListenerController:
-    """Coordinates Stage 1 local transcription for both audio sources."""
+    """Coordinates local transcription for microphone and system audio."""
 
-    def __init__(self, callbacks, mic_device: int = MIC_DEVICE_INDEX):
+    def __init__(
+        self,
+        callbacks,
+        mic_device: int = MIC_DEVICE_INDEX,
+        whisper_model: str = WHISPER_MODEL,
+        transcription_language: str | None = "en",
+        initial_prompt: str | None = WHISPER_INITIAL_PROMPT,
+    ):
         self.callbacks = callbacks
         self.mic_device = mic_device
+        self.whisper_model = whisper_model
+        self.transcription_language = transcription_language
+        self.initial_prompt = initial_prompt
 
         self.running = False
         self.mic_streamer: LocalMicStreamer | None = None
@@ -616,6 +628,9 @@ class ListenerController:
                     text,
                 ),
                 on_error=self._on_transcription_error,
+                model_name=self.whisper_model,
+                language=self.transcription_language,
+                initial_prompt=self.initial_prompt,
             )
             self.transcriber.start()
         except Exception as exc:
