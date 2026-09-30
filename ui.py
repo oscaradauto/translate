@@ -1276,13 +1276,13 @@ class AssistantTab(QWidget):
         )
 
     def _enable_capture_exclusion(self) -> bool:
-        if self._capture_exclusion_active:
-            self._set_capture_status(
-                "hidden",
-                self._capture_exclusion_message,
-            )
+        if (
+            self._capture_exclusion_active
+            and self._capture_state == "hidden"
+        ):
             return True
 
+        # Re-apply and verify when the previous effective state is uncertain.
         ok, message = _set_window_capture_exclusion(
             self.window(),
             True,
