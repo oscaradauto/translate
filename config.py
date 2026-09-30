@@ -175,7 +175,10 @@ GROQ_REASONING_EFFORT = os.getenv(
     "medium",
 )
 GROQ_MAX_COMPLETION_TOKENS = int(
-    os.getenv("GROQ_MAX_COMPLETION_TOKENS", "180")
+    os.getenv("GROQ_MAX_COMPLETION_TOKENS", "260")
+)
+GROQ_CONTINUATION_MAX_COMPLETION_TOKENS = int(
+    os.getenv("GROQ_CONTINUATION_MAX_COMPLETION_TOKENS", "180")
 )
 
 # Coding / whiteboarding answers may need a short explanation plus a complete
