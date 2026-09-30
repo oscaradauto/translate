@@ -785,6 +785,7 @@ class AssistantTab(QWidget):
         self._stopping = False
         self._capture_exclusion_active = False
         self._capture_exclusion_message = ""
+        self._capture_state = "idle"
 
         self._transcript_entries: dict[tuple[str, int], dict] = {}
         self._transcript_order: list[tuple[str, int]] = []
@@ -958,11 +959,6 @@ class AssistantTab(QWidget):
         header.addSpacing(4)
         header.addWidget(self.status_dot)
         header.addWidget(self.status_label)
-        header.addSpacing(6)
-        header.addWidget(capture_mode_label)
-        header.addWidget(self.capture_mode_combo)
-        header.addSpacing(3)
-        header.addWidget(self.capture_status_label)
         header.addStretch()
         header.addWidget(input_label)
         header.addSpacing(6)
@@ -1019,6 +1015,11 @@ class AssistantTab(QWidget):
         )
 
         conversation_header.addWidget(conversation_title)
+        conversation_header.addSpacing(10)
+        conversation_header.addWidget(capture_mode_label)
+        conversation_header.addWidget(self.capture_mode_combo)
+        conversation_header.addSpacing(3)
+        conversation_header.addWidget(self.capture_status_label)
         conversation_header.addStretch()
         conversation_header.addWidget(self.verify_groq_button)
         conversation_header.addSpacing(6)
@@ -1202,6 +1203,7 @@ class AssistantTab(QWidget):
         message: str = "",
     ) -> None:
         self._capture_exclusion_message = message
+        self._capture_state = state
 
         if state == "hidden":
             self._capture_exclusion_active = True
@@ -1216,9 +1218,8 @@ class AssistantTab(QWidget):
             )
             return
 
-        self._capture_exclusion_active = False
-
         if state == "hidden_failed":
+            self._capture_exclusion_active = False
             self.capture_status_label.setText("⚠ Visible")
             self.capture_status_label.setStyleSheet(
                 f"color: {WARNING}; font-size: 10px; "
@@ -1231,6 +1232,7 @@ class AssistantTab(QWidget):
             return
 
         if state == "visible":
+            self._capture_exclusion_active = False
             self.capture_status_label.setText("👁 Visible")
             self.capture_status_label.setStyleSheet(
                 f"color: {MUTED}; font-size: 10px; "
@@ -1243,6 +1245,8 @@ class AssistantTab(QWidget):
             return
 
         if state == "visible_failed":
+            # Preserve the previous effective flag: if WDA_NONE failed after
+            # Hidden had been active, the window may still be excluded.
             self.capture_status_label.setText("⚠ Capture unknown")
             self.capture_status_label.setStyleSheet(
                 f"color: {WARNING}; font-size: 10px; "
@@ -1255,6 +1259,7 @@ class AssistantTab(QWidget):
             return
 
         # Idle: show what will happen when Stage 2 starts.
+        self._capture_exclusion_active = False
         if self._capture_mode() == "hidden":
             self.capture_status_label.setText("Ready to hide")
             self.capture_status_label.setToolTip(
@@ -1308,8 +1313,7 @@ class AssistantTab(QWidget):
         return False
 
     def _disable_capture_exclusion(self) -> None:
-        # Used when Stage 2 stops/closes. Restore normal Windows capture, then
-        # return the UI to the selected idle preference.
+        # Used when Stage 2 stops/closes. Restore normal Windows capture.
         if self._capture_exclusion_active:
             ok, message = _set_window_capture_exclusion(
                 self.window(),
@@ -1321,6 +1325,8 @@ class AssistantTab(QWidget):
                 print(
                     f"[Privacy] Could not disable capture exclusion: {message}"
                 )
+                self._set_capture_status("visible_failed", message)
+                return
 
         self._capture_exclusion_active = False
         self._capture_exclusion_message = ""
@@ -1366,11 +1372,12 @@ class AssistantTab(QWidget):
         # Stage 2 is running. Hidden remains the default.
         requested_capture_mode = self._capture_mode()
         capture_hidden = False
+        capture_visible = True
 
         if requested_capture_mode == "hidden":
             capture_hidden = self._enable_capture_exclusion()
         else:
-            self._show_in_capture()
+            capture_visible = self._show_in_capture()
 
         self._clear_session_ui()
         if (
@@ -1386,6 +1393,11 @@ class AssistantTab(QWidget):
         elif requested_capture_mode == "visible":
             self.activity_label.setText(
                 "Capture visible · user selected"
+                if capture_visible
+                else "⚠ Capture state unknown"
+            )
+            self.activity_label.setToolTip(
+                self._capture_exclusion_message
             )
 
         self.interview_button.setEnabled(False)
@@ -1563,10 +1575,12 @@ class AssistantTab(QWidget):
                 if scope == "both"
                 else "Listening for interviewer"
             )
-            if self._capture_exclusion_active:
+            if self._capture_state == "hidden":
                 capture_suffix = "Capture hidden"
-            elif self._capture_mode() == "visible":
+            elif self._capture_state == "visible":
                 capture_suffix = "Capture visible"
+            elif self._capture_state == "visible_failed":
+                capture_suffix = "⚠ Capture unknown"
             else:
                 capture_suffix = "⚠ Capture visible"
 
@@ -2014,17 +2028,23 @@ class AssistantTab(QWidget):
                 if scope == "both"
                 else "Listening for interviewer"
             )
-            if self._capture_exclusion_active:
+            if self._capture_state == "hidden":
                 capture_suffix = "Capture hidden"
                 capture_tip = (
                     "La ventana principal está excluida de capturas compatibles "
                     "mientras Stage 2 está activo."
                 )
-            elif self._capture_mode() == "visible":
+            elif self._capture_state == "visible":
                 capture_suffix = "Capture visible"
                 capture_tip = (
                     "Visible fue seleccionado por el usuario; la ventana puede "
                     "aparecer normalmente en capturas."
+                )
+            elif self._capture_state == "visible_failed":
+                capture_suffix = "⚠ Capture unknown"
+                capture_tip = (
+                    "Windows no pudo confirmar el cambio a Visible. "
+                    + self._capture_exclusion_message
                 )
             else:
                 capture_suffix = "⚠ Capture visible"
