@@ -705,6 +705,10 @@ class AssistantTab(QWidget):
         self._max_transcript_entries = 30
         self._answer_buffer = ""
         self._understood_question_text = ""
+        self._pending_understood_question = ""
+        self._pending_understood_topic = ""
+        self._pending_understood_language = ""
+        self._conversation_history: dict[tuple[str, int], dict] = {}
         self._has_any_turn = False
         self._has_interviewer_turn = False
 
@@ -860,8 +864,19 @@ class AssistantTab(QWidget):
             f"color: {MUTED}; font-size: 10px; background: transparent;"
         )
 
+        self.copy_conversation_button = QPushButton(
+            "📋 Copiar conversación"
+        )
+        self.copy_conversation_button.setStyleSheet(_button_style())
+        self.copy_conversation_button.setEnabled(False)
+        self.copy_conversation_button.clicked.connect(
+            self._copy_conversation
+        )
+
         conversation_header.addWidget(conversation_title)
         conversation_header.addStretch()
+        conversation_header.addWidget(self.copy_conversation_button)
+        conversation_header.addSpacing(6)
         conversation_header.addWidget(self.activity_label)
 
         root.addLayout(conversation_header)
@@ -1143,8 +1158,12 @@ class AssistantTab(QWidget):
     def _clear_session_ui(self) -> None:
         self._transcript_entries.clear()
         self._transcript_order.clear()
+        self._conversation_history.clear()
         self._answer_buffer = ""
         self._understood_question_text = ""
+        self._pending_understood_question = ""
+        self._pending_understood_topic = ""
+        self._pending_understood_language = ""
         self._has_any_turn = False
         self._has_interviewer_turn = False
 
@@ -1159,6 +1178,7 @@ class AssistantTab(QWidget):
         self.understood_question.setText("Understood question: —")
         self.answer_last_button.setEnabled(False)
         self.regenerate_button.setEnabled(False)
+        self.copy_conversation_button.setEnabled(False)
         self.copy_question_button.setEnabled(False)
         self.copy_answer_button.setEnabled(False)
 
@@ -1263,6 +1283,22 @@ class AssistantTab(QWidget):
             partial=False,
         )
 
+        key = (speaker, segment_id)
+        existing = self._conversation_history.get(key)
+        timestamp = (
+            existing["timestamp"]
+            if existing is not None
+            else _now()
+        )
+        self._conversation_history[key] = {
+            "timestamp": timestamp,
+            "speaker": speaker,
+            "text": text,
+        }
+        self.copy_conversation_button.setEnabled(
+            bool(self._conversation_history)
+        )
+
         self._has_any_turn = True
         if speaker == "INTERVIEWER":
             self._has_interviewer_turn = True
@@ -1279,19 +1315,11 @@ class AssistantTab(QWidget):
         )
 
     def _on_question_candidate(self, text: str) -> None:
-        # A new interviewer turn is being analyzed. Clear the previous
-        # suggestion immediately so an answer to the old question is never
-        # mistaken for the current one.
-        self._answer_buffer = ""
-        self._understood_question_text = ""
-        self.answer_view.setPlainText("Analyzing question...")
-        self.answer_state.setText("Analyzing...")
-        self.understood_question.setText(
-            "Understood question: analyzing..."
-        )
-        self.regenerate_button.setEnabled(False)
-        self.copy_question_button.setEnabled(False)
-        self.copy_answer_button.setEnabled(False)
+        # Keep the last confirmed answer visible while this turn is only a
+        # candidate. It may still become WAIT or IGNORE.
+        self._pending_understood_question = ""
+        self._pending_understood_topic = ""
+        self._pending_understood_language = ""
         self.activity_label.setText(
             "Analyzing question..."
         )
@@ -1302,6 +1330,29 @@ class AssistantTab(QWidget):
         topic: str,
         language: str,
     ) -> None:
+        # The contextualizer runs before WAIT / IGNORE / ANSWER is known.
+        # Keep this result pending so non-technical turns do not replace the
+        # last confirmed technical question in the UI.
+        self._pending_understood_question = question.strip()
+        self._pending_understood_topic = topic.strip()
+        self._pending_understood_language = language.strip()
+
+    def _on_question_waiting(self, text: str) -> None:
+        self._pending_understood_question = ""
+        self._pending_understood_topic = ""
+        self._pending_understood_language = ""
+        self.activity_label.setText(
+            "Waiting for the question to finish..."
+        )
+
+    def _on_question_detected(self, text: str) -> None:
+        question = (
+            self._pending_understood_question
+            or text.strip()
+        )
+        topic = self._pending_understood_topic
+        language = self._pending_understood_language
+
         details = []
         if topic:
             details.append(topic)
@@ -1309,39 +1360,24 @@ class AssistantTab(QWidget):
             details.append(language.upper())
 
         suffix = f"  ·  {' · '.join(details)}" if details else ""
-        self._understood_question_text = question.strip()
+        self._understood_question_text = question
         self.understood_question.setText(
             f"Understood question: {question}{suffix}"
         )
-        self.copy_question_button.setEnabled(
-            bool(self._understood_question_text)
-        )
+        self.copy_question_button.setEnabled(bool(question))
 
-    def _on_question_waiting(self, text: str) -> None:
-        self._answer_buffer = ""
-        self.answer_view.setPlainText(
-            "Waiting for the speaker to finish the question..."
-        )
-        self.answer_state.setText("Waiting")
-        self.regenerate_button.setEnabled(False)
-        self.copy_answer_button.setEnabled(False)
-        self.activity_label.setText(
-            "Waiting for the question to finish..."
-        )
+        self._pending_understood_question = ""
+        self._pending_understood_topic = ""
+        self._pending_understood_language = ""
 
-    def _on_question_detected(self, text: str) -> None:
         self.activity_label.setText(
             "Technical question detected"
         )
 
     def _on_question_ignored(self, text: str) -> None:
-        self._answer_buffer = ""
-        self.answer_view.setPlainText(
-            "No technical answer needed. Waiting for the next question..."
-        )
-        self.answer_state.setText("Waiting")
-        self.regenerate_button.setEnabled(False)
-        self.copy_answer_button.setEnabled(False)
+        self._pending_understood_question = ""
+        self._pending_understood_topic = ""
+        self._pending_understood_language = ""
         self.activity_label.setText(
             "Non-technical turn ignored"
         )
@@ -1380,6 +1416,30 @@ class AssistantTab(QWidget):
     def _regenerate(self) -> None:
         if self.controller is not None:
             self.controller.regenerate()
+
+    def _copy_conversation(self) -> None:
+        if not self._conversation_history:
+            return
+
+        blocks = []
+        for entry in self._conversation_history.values():
+            blocks.append(
+                f'[{entry["timestamp"]}] {entry["speaker"]}\n'
+                f'{entry["text"]}'
+            )
+
+        QApplication.clipboard().setText(
+            "\n\n".join(blocks)
+        )
+        self.copy_conversation_button.setText(
+            "✓ Conversación copiada"
+        )
+        QTimer.singleShot(
+            1200,
+            lambda: self.copy_conversation_button.setText(
+                "📋 Copiar conversación"
+            ),
+        )
 
     def _copy_question(self) -> None:
         if not self._understood_question_text:
