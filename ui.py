@@ -5,8 +5,8 @@ Subtítulo:
     Faster-Whisper. No assistant logic is loaded or displayed.
 
 Asistente:
-    Independent technical-interview workspace for Stage 2. It uses local
-    Faster-Whisper transcription plus Groq for technical answers.
+    Independent technical-interview workspace for Stage 2. It uses Groq
+    Whisper for high-accuracy interview transcription and Groq for answers.
 """
 
 from __future__ import annotations
@@ -101,6 +101,7 @@ class AssistantBridge(QObject):
     status_changed = pyqtSignal(str)
     transcript_partial = pyqtSignal(str, str, int)
     transcript_final = pyqtSignal(str, str, int)
+    transcript_rejected = pyqtSignal(str, str)
     question_candidate = pyqtSignal(str)
     turn_understood = pyqtSignal(str, str, str)
     question_waiting = pyqtSignal(str)
@@ -374,7 +375,7 @@ class SubtitleTab(QWidget):
 
         self.start_button.setEnabled(False)
         self.start_button.setText("⏳ Cargando...")
-        self._on_status_changed("Cargando modelo local...")
+        self._on_status_changed("Preparando audio...")
 
         callbacks = {
             "on_status": lambda text: self.bridge.status_changed.emit(text),
@@ -917,7 +918,7 @@ class AssistantTab(QWidget):
         actions.addWidget(self.copy_answer_button)
         actions.addStretch()
 
-        engine = QLabel("🎤 Faster-Whisper local   ⚡ Groq GPT-OSS 120B")
+        engine = QLabel("🎤 Groq Whisper Large V3   ⚡ Groq GPT-OSS 120B")
         engine.setStyleSheet(
             f"color: {MUTED}; font-size: 10px; background: transparent;"
         )
@@ -932,6 +933,9 @@ class AssistantTab(QWidget):
         )
         self.bridge.transcript_final.connect(
             self._on_transcript_final
+        )
+        self.bridge.transcript_rejected.connect(
+            self._on_transcript_rejected
         )
         self.bridge.question_candidate.connect(
             self._on_question_candidate
@@ -994,6 +998,13 @@ class AssistantTab(QWidget):
                     speaker,
                     text,
                     segment_id,
+                )
+            ),
+            "on_transcript_rejected": (
+                lambda speaker, text:
+                self.bridge.transcript_rejected.emit(
+                    speaker,
+                    text,
                 )
             ),
             "on_question_candidate": (
@@ -1166,6 +1177,15 @@ class AssistantTab(QWidget):
         # Manual fallback is also useful for solo testing: if the only
         # available utterance is YOU, InterviewController can answer it.
         self.answer_last_button.setEnabled(True)
+
+    def _on_transcript_rejected(
+        self,
+        speaker: str,
+        text: str,
+    ) -> None:
+        self.activity_label.setText(
+            "Noisy speech ignored"
+        )
 
     def _on_question_candidate(self, text: str) -> None:
         self.activity_label.setText(
