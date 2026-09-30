@@ -13,6 +13,7 @@ from collections import Counter, deque
 from typing import Callable
 
 from config import (
+    ASSISTANT_RESPONSE_SCOPE,
     GROQ_STT_MODEL,
     INTERVIEW_CONTEXT_TURNS,
     INTERVIEW_MAX_UTTERANCE_SECONDS,
@@ -37,10 +38,16 @@ class InterviewController:
         callbacks: dict[str, Callable],
         mic_device: int = MIC_DEVICE_INDEX,
         language: str = "en",
+        response_scope: str = ASSISTANT_RESPONSE_SCOPE,
     ) -> None:
         self.callbacks = callbacks
         self.mic_device = mic_device
         self.language = language if language in {"en", "es"} else "en"
+        self.response_scope = (
+            response_scope
+            if response_scope in {"interviewer", "both"}
+            else "interviewer"
+        )
 
         self.listener: ListenerController | None = None
         self.assistant: GroqInterviewAssistant | None = None
@@ -49,7 +56,8 @@ class InterviewController:
         self._turns: deque[ConversationTurn] = deque(
             maxlen=max(4, INTERVIEW_CONTEXT_TURNS)
         )
-        self._pending_interviewer: list[str] = []
+        self._pending_response_parts: list[str] = []
+        self._pending_response_speaker = ""
         self._pending_lock = threading.Lock()
         self._question_timer: threading.Timer | None = None
 
@@ -60,7 +68,8 @@ class InterviewController:
         self._last_question = ""
         self._last_answer = ""
         self._topic_memory = ""
-        self._deferred_interviewer_text = ""
+        self._deferred_response_text = ""
+        self._deferred_response_speaker = ""
 
     def start(self) -> None:
         if self.running:
@@ -74,14 +83,16 @@ class InterviewController:
 
         self.running = True
         self._turns.clear()
-        self._pending_interviewer.clear()
+        self._pending_response_parts.clear()
+        self._pending_response_speaker = ""
         self._last_interviewer_text = ""
         self._last_turn_text = ""
         self._last_turn_speaker = ""
         self._last_question = ""
         self._last_answer = ""
         self._topic_memory = ""
-        self._deferred_interviewer_text = ""
+        self._deferred_response_text = ""
+        self._deferred_response_speaker = ""
 
         callbacks = {
             "on_status": self._on_listener_status,
@@ -133,7 +144,8 @@ class InterviewController:
         with self._pending_lock:
             timer = self._question_timer
             self._question_timer = None
-            self._pending_interviewer.clear()
+            self._pending_response_parts.clear()
+            self._pending_response_speaker = ""
 
         if timer is not None:
             timer.cancel()
@@ -151,27 +163,48 @@ class InterviewController:
             self.language = language
             self._emit("on_language_changed", language)
 
-    def answer_last_interviewer_turn(self) -> None:
-        """Manually answer the latest complete turn.
-
-        In solo testing, combine the latest consecutive YOU fragments because
-        Faster-Whisper may split one spoken question into multiple finals.
-        Automatic answers still only originate from INTERVIEWER turns.
-        """
-        question = self._last_interviewer_text.strip()
-        if not question:
-            # Solo-testing fallback: with Groq Whisper and the longer Stage 2
-            # utterance window, the latest finalized YOU turn should already
-            # contain the complete question. Do not concatenate older test
-            # questions into the current one.
-            question = self._last_turn_text.strip()
-
-        if not question:
-            self._emit(
-                "on_assistant_error",
-                "Todavía no hay una intervención para responder.",
-            )
+    def set_response_scope(self, scope: str) -> None:
+        if scope not in {"interviewer", "both"}:
             return
+
+        self.response_scope = scope
+
+        # If the user switches back to interviewer-only mode while a local
+        # YOU turn is waiting for analysis, discard that pending trigger. The
+        # transcript itself remains in context.
+        if scope == "interviewer":
+            with self._pending_lock:
+                if self._pending_response_speaker == "YOU":
+                    if self._question_timer is not None:
+                        self._question_timer.cancel()
+                    self._question_timer = None
+                    self._pending_response_parts.clear()
+                    self._pending_response_speaker = ""
+
+                if self._deferred_response_speaker == "YOU":
+                    self._deferred_response_text = ""
+                    self._deferred_response_speaker = ""
+
+        self._emit("on_response_scope_changed", scope)
+
+    def answer_last_interviewer_turn(self) -> None:
+        """Manually answer the latest turn allowed by the response scope."""
+        if self.response_scope == "interviewer":
+            question = self._last_interviewer_text.strip()
+            if not question:
+                self._emit(
+                    "on_assistant_error",
+                    "Todavía no hay una intervención del entrevistador para responder.",
+                )
+                return
+        else:
+            question = self._last_turn_text.strip()
+            if not question:
+                self._emit(
+                    "on_assistant_error",
+                    "Todavía no hay una intervención para responder.",
+                )
+                return
 
         self._start_answer(question, force=True)
 
@@ -199,11 +232,10 @@ class InterviewController:
             segment_id,
         )
 
-        # A long interviewer question may be split by the transcription
-        # segmenter. Continuous partials mean the speaker is still talking, so
-        # keep pushing the decision timer forward until speech actually stops.
-        if speaker == "INTERVIEWER":
-            self._extend_question_timer_if_pending()
+        # Keep the decision timer open while an allowed speaker is still
+        # talking. In interviewer mode, YOU never triggers an answer.
+        if self._speaker_can_trigger(speaker):
+            self._extend_question_timer_if_pending(speaker)
 
     def _on_final(
         self,
@@ -231,6 +263,8 @@ class InterviewController:
 
         self._last_turn_text = cleaned
         self._last_turn_speaker = speaker
+        if speaker == "INTERVIEWER":
+            self._last_interviewer_text = cleaned
 
         self._turns.append(
             ConversationTurn(speaker=speaker, text=cleaned)
@@ -242,8 +276,8 @@ class InterviewController:
             segment_id,
         )
 
-        if speaker == "INTERVIEWER":
-            self._queue_interviewer_text(cleaned)
+        if self._speaker_can_trigger(speaker):
+            self._queue_response_text(speaker, cleaned)
 
     @staticmethod
     def _is_low_quality_transcript(text: str) -> bool:
@@ -277,17 +311,43 @@ class InterviewController:
             or (len(tokens) >= 14 and unique_ratio <= 0.25)
         )
 
+    def _speaker_can_trigger(self, speaker: str) -> bool:
+        return (
+            speaker == "INTERVIEWER"
+            or self.response_scope == "both"
+        )
+
     def _new_question_timer(self) -> threading.Timer:
         timer = threading.Timer(
             INTERVIEW_QUESTION_DEBOUNCE_SECONDS,
-            self._consume_interviewer_text,
+            self._consume_response_text,
         )
         timer.daemon = True
         return timer
 
-    def _queue_interviewer_text(self, text: str) -> None:
+    def _queue_response_text(
+        self,
+        speaker: str,
+        text: str,
+    ) -> None:
+        flush_speaker = ""
+        flush_candidate = ""
+
         with self._pending_lock:
-            self._pending_interviewer.append(text)
+            # Never merge speech from two different people into one question.
+            if (
+                self._pending_response_parts
+                and self._pending_response_speaker
+                and self._pending_response_speaker != speaker
+            ):
+                flush_speaker = self._pending_response_speaker
+                flush_candidate = " ".join(
+                    self._pending_response_parts
+                ).strip()
+                self._pending_response_parts.clear()
+
+            self._pending_response_speaker = speaker
+            self._pending_response_parts.append(text)
 
             if self._question_timer is not None:
                 self._question_timer.cancel()
@@ -295,9 +355,20 @@ class InterviewController:
             self._question_timer = self._new_question_timer()
             self._question_timer.start()
 
-    def _extend_question_timer_if_pending(self) -> None:
+        if flush_candidate:
+            self._dispatch_candidate(
+                flush_speaker,
+                flush_candidate,
+            )
+
+    def _extend_question_timer_if_pending(
+        self,
+        speaker: str,
+    ) -> None:
         with self._pending_lock:
-            if not self._pending_interviewer:
+            if not self._pending_response_parts:
+                return
+            if self._pending_response_speaker != speaker:
                 return
 
             if self._question_timer is not None:
@@ -306,26 +377,51 @@ class InterviewController:
             self._question_timer = self._new_question_timer()
             self._question_timer.start()
 
-    def _consume_interviewer_text(self) -> None:
+    def _consume_response_text(self) -> None:
         with self._pending_lock:
-            parts = self._pending_interviewer[:]
-            self._pending_interviewer.clear()
+            parts = self._pending_response_parts[:]
+            speaker = self._pending_response_speaker
+            self._pending_response_parts.clear()
+            self._pending_response_speaker = ""
             self._question_timer = None
 
-        if not self.running or not parts:
+        if not self.running or not parts or not speaker:
             return
 
         candidate = " ".join(parts).strip()
-        if self._deferred_interviewer_text:
+        self._dispatch_candidate(speaker, candidate)
+
+    def _dispatch_candidate(
+        self,
+        speaker: str,
+        candidate: str,
+    ) -> None:
+        if not self.running or not candidate:
+            return
+        if not self._speaker_can_trigger(speaker):
+            return
+
+        if (
+            self._deferred_response_text
+            and self._deferred_response_speaker == speaker
+        ):
             candidate = (
-                f"{self._deferred_interviewer_text} {candidate}"
+                f"{self._deferred_response_text} {candidate}"
             ).strip()
-            self._deferred_interviewer_text = ""
+            self._deferred_response_text = ""
+            self._deferred_response_speaker = ""
 
-        self._last_interviewer_text = candidate
-        self._start_answer(candidate, force=False)
+        if speaker == "INTERVIEWER":
+            self._last_interviewer_text = candidate
 
-    def _start_answer(self, question: str, force: bool) -> None:
+        self._start_answer(candidate, force=False, speaker=speaker)
+
+    def _start_answer(
+        self,
+        question: str,
+        force: bool,
+        speaker: str = "",
+    ) -> None:
         if not self.running or self.assistant is None:
             return
 
@@ -343,7 +439,7 @@ class InterviewController:
 
         thread = threading.Thread(
             target=self._answer_worker,
-            args=(question, recent_turns, language, force),
+            args=(question, recent_turns, language, force, speaker),
             name="interview-answer",
             daemon=True,
         )
@@ -355,6 +451,7 @@ class InterviewController:
         recent_turns: list[ConversationTurn],
         language: str,
         force: bool,
+        speaker: str,
     ) -> None:
         try:
             assistant = self.assistant
@@ -392,7 +489,8 @@ class InterviewController:
 
             if not force:
                 if analysis.action == "WAIT":
-                    self._deferred_interviewer_text = question.strip()
+                    self._deferred_response_text = question.strip()
+                    self._deferred_response_speaker = speaker
                     self._emit("on_question_waiting", reconstructed)
                     return
 
