@@ -15,7 +15,6 @@ from typing import Callable, Iterable
 
 from groq import Groq
 
-from skills_loader import build_context_block
 from config import (
     GROQ_CODING_MAX_COMPLETION_TOKENS,
     GROQ_MAX_COMPLETION_TOKENS,
@@ -545,11 +544,22 @@ class GroqInterviewAssistant:
                 for part in (question, topic_memory)
                 if part and part.strip()
             )
-            skill_context = build_context_block(
-                skill_query,
-                language_mode=language,
-                max_matches=3,
-            )
+            try:
+                from skills_loader import build_context_block
+
+                skill_context = build_context_block(
+                    skill_query,
+                    language_mode=language,
+                    max_matches=3,
+                )
+            except Exception as exc:
+                # Skills are optional enrichment. Never block the established
+                # GPT-OSS answer path because the local profile is unavailable.
+                print(
+                    "[Stage2Skills] Perfil no disponible; "
+                    f"continuando sin skill: {exc}"
+                )
+                skill_context = ""
 
         user_content = (
             f"Current interview topic:\n{topic_memory or '(unknown)'}\n\n"
