@@ -960,14 +960,6 @@ class AssistantTab(QWidget):
         header.addWidget(self.status_dot)
         header.addWidget(self.status_label)
         header.addStretch()
-        header.addWidget(input_label)
-        header.addSpacing(6)
-        header.addWidget(response_scope_label)
-        header.addWidget(self.response_scope_combo)
-        header.addSpacing(6)
-        header.addWidget(language_label)
-        header.addWidget(self.language_combo)
-        header.addSpacing(6)
         header.addWidget(self.interview_button)
 
         root.addLayout(header)
@@ -1015,16 +1007,9 @@ class AssistantTab(QWidget):
         )
 
         conversation_header.addWidget(conversation_title)
-        conversation_header.addSpacing(10)
-        conversation_header.addWidget(capture_mode_label)
-        conversation_header.addWidget(self.capture_mode_combo)
-        conversation_header.addSpacing(3)
-        conversation_header.addWidget(self.capture_status_label)
         conversation_header.addStretch()
-        conversation_header.addWidget(self.verify_groq_button)
-        conversation_header.addSpacing(6)
         conversation_header.addWidget(self.copy_conversation_button)
-        conversation_header.addSpacing(6)
+        conversation_header.addSpacing(10)
         conversation_header.addWidget(self.activity_label)
 
         root.addLayout(conversation_header)
@@ -1130,12 +1115,6 @@ class AssistantTab(QWidget):
         actions.addWidget(self.copy_question_button)
         actions.addWidget(self.copy_answer_button)
         actions.addStretch()
-
-        engine = QLabel("🎤 Groq Whisper Large V3   ⚡ Groq GPT-OSS 120B")
-        engine.setStyleSheet(
-            f"color: {MUTED}; font-size: 10px; background: transparent;"
-        )
-        actions.addWidget(engine)
 
         root.addLayout(actions)
 
@@ -2105,6 +2084,168 @@ class AssistantTab(QWidget):
         self._disable_capture_exclusion()
 
 
+
+class SettingsTab(QWidget):
+    """Centralized UI settings without changing Stage 1/Stage 2 behavior."""
+
+    def __init__(self, assistant_tab: AssistantTab):
+        super().__init__()
+        self.assistant_tab = assistant_tab
+        self._build_ui()
+
+    def _section_title(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setStyleSheet(
+            f"color: {TEXT}; font-size: 13px; font-weight: 750; "
+            "background: transparent;"
+        )
+        return label
+
+    def _hint(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setWordWrap(True)
+        label.setStyleSheet(
+            f"color: {MUTED}; font-size: 10px; background: transparent;"
+        )
+        return label
+
+    def _row_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setMinimumWidth(145)
+        label.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px; background: transparent;"
+        )
+        return label
+
+    def _card(self) -> tuple[QFrame, QVBoxLayout]:
+        card = QFrame()
+        card.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: rgba(255,255,255,7);
+                border: 1px solid rgba(255,255,255,16);
+                border-radius: 12px;
+            }}
+            """
+        )
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(11)
+        return card, layout
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 18, 22, 18)
+        root.setSpacing(14)
+
+        heading = QLabel("Settings")
+        heading.setStyleSheet(
+            f"color: {TEXT}; font-size: 16px; font-weight: 800; "
+            "background: transparent;"
+        )
+        subtitle = self._hint(
+            "Configura Stage 2 aquí para mantener la pantalla de entrevista "
+            "limpia y enfocada."
+        )
+        root.addWidget(heading)
+        root.addWidget(subtitle)
+
+        interview_card, interview = self._card()
+        interview.addWidget(self._section_title("Interview"))
+
+        input_row = QHBoxLayout()
+        input_row.addWidget(self._row_label("Input language"))
+        input_value = QLabel("Auto · English / Español")
+        input_value.setStyleSheet(
+            f"color: {TEXT}; font-size: 11px; background: transparent;"
+        )
+        input_value.setToolTip(
+            "Stage 2 detecta inglés o español de forma independiente por turno."
+        )
+        input_row.addWidget(input_value)
+        input_row.addStretch()
+        interview.addLayout(input_row)
+
+        response_row = QHBoxLayout()
+        response_row.addWidget(self._row_label("Responder a"))
+        response_row.addWidget(self.assistant_tab.response_scope_combo)
+        response_row.addStretch()
+        interview.addLayout(response_row)
+
+        answer_row = QHBoxLayout()
+        answer_row.addWidget(self._row_label("Answer language"))
+        answer_row.addWidget(self.assistant_tab.language_combo)
+        answer_row.addStretch()
+        interview.addLayout(answer_row)
+
+        interview.addWidget(
+            self._hint(
+                "Entrevistador es el modo recomendado para una entrevista real. "
+                "Ambos es útil para pruebas."
+            )
+        )
+        root.addWidget(interview_card)
+
+        privacy_card, privacy = self._card()
+        privacy.addWidget(self._section_title("Privacy & screen sharing"))
+
+        capture_row = QHBoxLayout()
+        capture_row.addWidget(self._row_label("Capture"))
+        capture_row.addWidget(self.assistant_tab.capture_mode_combo)
+        capture_row.addSpacing(10)
+        capture_row.addWidget(self.assistant_tab.capture_status_label)
+        capture_row.addStretch()
+        privacy.addLayout(capture_row)
+
+        privacy.addWidget(
+            self._hint(
+                "Hidden intenta excluir toda la ventana de Meeting Assistant "
+                "de capturas compatibles de Windows. Visible restaura la "
+                "captura normal. El cambio se aplica también durante Stage 2."
+            )
+        )
+        root.addWidget(privacy_card)
+
+        services_card, services = self._card()
+        services.addWidget(self._section_title("Groq services"))
+
+        verify_row = QHBoxLayout()
+        verify_row.addWidget(self._row_label("Preflight"))
+        verify_row.addWidget(self.assistant_tab.verify_groq_button)
+        verify_row.addStretch()
+        services.addLayout(verify_row)
+
+        stt_row = QHBoxLayout()
+        stt_row.addWidget(self._row_label("Speech to text"))
+        stt_value = QLabel("Groq · Whisper Large V3")
+        stt_value.setStyleSheet(
+            f"color: {TEXT}; font-size: 11px; background: transparent;"
+        )
+        stt_row.addWidget(stt_value)
+        stt_row.addStretch()
+        services.addLayout(stt_row)
+
+        gpt_row = QHBoxLayout()
+        gpt_row.addWidget(self._row_label("Assistant"))
+        gpt_value = QLabel("Groq · GPT-OSS 120B")
+        gpt_value.setStyleSheet(
+            f"color: {TEXT}; font-size: 11px; background: transparent;"
+        )
+        gpt_row.addWidget(gpt_value)
+        gpt_row.addStretch()
+        services.addLayout(gpt_row)
+
+        services.addWidget(
+            self._hint(
+                "Verificar Groq hace llamadas mínimas a Whisper y GPT antes "
+                "de una entrevista. No cambia la configuración del asistente."
+            )
+        )
+        root.addWidget(services_card)
+
+        root.addStretch()
+
+
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -2228,9 +2369,11 @@ class MainWindow(QWidget):
 
         self.subtitle_tab = SubtitleTab()
         self.assistant_tab = AssistantTab()
+        self.settings_tab = SettingsTab(self.assistant_tab)
 
         self.tabs.addTab(self.subtitle_tab, "Subtítulo")
         self.tabs.addTab(self.assistant_tab, "Asistente")
+        self.tabs.addTab(self.settings_tab, "Settings")
 
         # Stage 1 is always selected when the app starts.
         self.tabs.setCurrentIndex(0)
