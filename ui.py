@@ -832,13 +832,45 @@ class AssistantTab(QWidget):
             f"color: {MUTED}; font-size: 11px; background: transparent;"
         )
 
-        self.capture_status_label = QLabel("Capture: normal")
+        capture_mode_label = QLabel("Capture:")
+        capture_mode_label.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px; background: transparent;"
+        )
+
+        self.capture_mode_combo = QComboBox()
+        self.capture_mode_combo.addItem("Hidden", "hidden")
+        self.capture_mode_combo.addItem("Visible", "visible")
+        self.capture_mode_combo.setMinimumWidth(88)
+        self.capture_mode_combo.setToolTip(
+            "Hidden: intenta excluir toda la ventana de capturas compatibles. "
+            "Visible: permite que la ventana aparezca normalmente."
+        )
+        self.capture_mode_combo.setStyleSheet(
+            f"""
+            QComboBox {{
+                background-color: rgba(255,255,255,15);
+                color: {TEXT};
+                border: 1px solid rgba(255,255,255,25);
+                border-radius: 8px;
+                padding: 5px 9px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {CARD_BG_SOFT};
+                color: {TEXT};
+                selection-background-color: {BLUE};
+            }}
+            """
+        )
+        self.capture_mode_combo.currentIndexChanged.connect(
+            self._on_capture_mode_changed
+        )
+
+        self.capture_status_label = QLabel("Ready to hide")
         self.capture_status_label.setStyleSheet(
             f"color: {MUTED_DARK}; font-size: 10px; background: transparent;"
         )
         self.capture_status_label.setToolTip(
-            "Stage 2 intentará ocultar la ventana de capturas compatibles "
-            "al iniciar la entrevista."
+            "Hidden está seleccionado y se aplicará al iniciar Stage 2."
         )
 
         input_label = QLabel("Input: Auto")
@@ -926,6 +958,9 @@ class AssistantTab(QWidget):
         header.addSpacing(4)
         header.addWidget(self.status_dot)
         header.addWidget(self.status_label)
+        header.addSpacing(6)
+        header.addWidget(capture_mode_label)
+        header.addWidget(self.capture_mode_combo)
         header.addSpacing(3)
         header.addWidget(self.capture_status_label)
         header.addStretch()
@@ -1158,16 +1193,19 @@ class AssistantTab(QWidget):
         else:
             self._stop_session()
 
+    def _capture_mode(self) -> str:
+        return self.capture_mode_combo.currentData() or "hidden"
+
     def _set_capture_status(
         self,
-        active: bool,
+        state: str,
         message: str = "",
     ) -> None:
-        self._capture_exclusion_active = active
         self._capture_exclusion_message = message
 
-        if active:
-            self.capture_status_label.setText("🔒 Capture hidden")
+        if state == "hidden":
+            self._capture_exclusion_active = True
+            self.capture_status_label.setText("🔒 Hidden")
             self.capture_status_label.setStyleSheet(
                 f"color: {GREEN}; font-size: 10px; "
                 "font-weight: 700; background: transparent;"
@@ -1176,29 +1214,68 @@ class AssistantTab(QWidget):
                 message
                 or "Windows confirmó la exclusión de capturas compatibles."
             )
-        elif message:
-            self.capture_status_label.setText("⚠ Capture visible")
+            return
+
+        self._capture_exclusion_active = False
+
+        if state == "hidden_failed":
+            self.capture_status_label.setText("⚠ Visible")
             self.capture_status_label.setStyleSheet(
                 f"color: {WARNING}; font-size: 10px; "
                 "font-weight: 700; background: transparent;"
             )
             self.capture_status_label.setToolTip(
-                "No se pudo ocultar la ventana. Stage 2 sigue funcionando. "
-                + message
+                "Hidden fue solicitado, pero Windows no pudo confirmarlo. "
+                "Stage 2 sigue funcionando. " + message
             )
-        else:
-            self.capture_status_label.setText("Capture: normal")
+            return
+
+        if state == "visible":
+            self.capture_status_label.setText("👁 Visible")
             self.capture_status_label.setStyleSheet(
-                f"color: {MUTED_DARK}; font-size: 10px; "
-                "background: transparent;"
+                f"color: {MUTED}; font-size: 10px; "
+                "font-weight: 700; background: transparent;"
             )
             self.capture_status_label.setToolTip(
-                "Stage 2 intentará ocultar la ventana de capturas compatibles "
-                "al iniciar la entrevista."
+                message
+                or "La ventana puede aparecer normalmente en capturas."
             )
+            return
+
+        if state == "visible_failed":
+            self.capture_status_label.setText("⚠ Capture unknown")
+            self.capture_status_label.setStyleSheet(
+                f"color: {WARNING}; font-size: 10px; "
+                "font-weight: 700; background: transparent;"
+            )
+            self.capture_status_label.setToolTip(
+                "Visible fue solicitado, pero Windows no pudo confirmar "
+                "WDA_NONE. " + message
+            )
+            return
+
+        # Idle: show what will happen when Stage 2 starts.
+        if self._capture_mode() == "hidden":
+            self.capture_status_label.setText("Ready to hide")
+            self.capture_status_label.setToolTip(
+                "Hidden está seleccionado y se aplicará al iniciar Stage 2."
+            )
+        else:
+            self.capture_status_label.setText("Ready visible")
+            self.capture_status_label.setToolTip(
+                "Visible está seleccionado; Stage 2 no ocultará la ventana."
+            )
+        self.capture_status_label.setStyleSheet(
+            f"color: {MUTED_DARK}; font-size: 10px; "
+            "background: transparent;"
+        )
 
     def _enable_capture_exclusion(self) -> bool:
         if self._capture_exclusion_active:
+            self._set_capture_status(
+                "hidden",
+                self._capture_exclusion_message,
+            )
             return True
 
         ok, message = _set_window_capture_exclusion(
@@ -1206,15 +1283,33 @@ class AssistantTab(QWidget):
             True,
         )
         if ok:
-            self._set_capture_status(True, message)
+            self._set_capture_status("hidden", message)
             print("[Privacy] Stage 2 capture exclusion enabled.")
             return True
 
-        self._set_capture_status(False, message)
+        self._set_capture_status("hidden_failed", message)
         print(f"[Privacy] Capture exclusion unavailable: {message}")
         return False
 
+    def _show_in_capture(self) -> bool:
+        # Always request WDA_NONE, even if the app did not previously confirm
+        # Hidden. This makes an explicit Visible selection authoritative.
+        ok, message = _set_window_capture_exclusion(
+            self.window(),
+            False,
+        )
+        if ok:
+            self._set_capture_status("visible", message)
+            print("[Privacy] Stage 2 capture exclusion disabled.")
+            return True
+
+        self._set_capture_status("visible_failed", message)
+        print(f"[Privacy] Could not confirm visible capture mode: {message}")
+        return False
+
     def _disable_capture_exclusion(self) -> None:
+        # Used when Stage 2 stops/closes. Restore normal Windows capture, then
+        # return the UI to the selected idle preference.
         if self._capture_exclusion_active:
             ok, message = _set_window_capture_exclusion(
                 self.window(),
@@ -1227,24 +1322,70 @@ class AssistantTab(QWidget):
                     f"[Privacy] Could not disable capture exclusion: {message}"
                 )
 
-        # Once Stage 2 is no longer active, return the indicator to its normal
-        # state even if capture exclusion had not been available.
-        self._set_capture_status(False)
+        self._capture_exclusion_active = False
+        self._capture_exclusion_message = ""
+        self._set_capture_status("idle")
+
+    def _on_capture_mode_changed(self, _index: int = -1) -> None:
+        mode = self._capture_mode()
+        session_active = (
+            self.controller is not None
+            or self._starting
+            or self._stopping
+        )
+
+        if not session_active:
+            self._set_capture_status("idle")
+            return
+
+        if mode == "hidden":
+            hidden = self._enable_capture_exclusion()
+            self.activity_label.setText(
+                "Capture hidden"
+                if hidden
+                else "⚠ Capture visible · Hidden could not be confirmed"
+            )
+            self.activity_label.setToolTip(
+                self._capture_exclusion_message
+            )
+        else:
+            visible = self._show_in_capture()
+            self.activity_label.setText(
+                "Capture visible"
+                if visible
+                else "⚠ Capture state unknown"
+            )
+            self.activity_label.setToolTip(
+                self._capture_exclusion_message
+            )
 
     def _start_session(self) -> None:
         self._starting = True
 
-        # Best-effort privacy: try to hide the entire app window from
-        # compatible Windows capture, but never block Stage 2 if unavailable.
-        capture_hidden = self._enable_capture_exclusion()
+        # Capture mode is user-configurable and can also be changed while
+        # Stage 2 is running. Hidden remains the default.
+        requested_capture_mode = self._capture_mode()
+        capture_hidden = False
+
+        if requested_capture_mode == "hidden":
+            capture_hidden = self._enable_capture_exclusion()
+        else:
+            self._show_in_capture()
 
         self._clear_session_ui()
-        if not capture_hidden:
+        if (
+            requested_capture_mode == "hidden"
+            and not capture_hidden
+        ):
             self.activity_label.setText(
                 "⚠ Capture visible · Stage 2 will continue normally"
             )
             self.activity_label.setToolTip(
                 self._capture_exclusion_message
+            )
+        elif requested_capture_mode == "visible":
+            self.activity_label.setText(
+                "Capture visible · user selected"
             )
 
         self.interview_button.setEnabled(False)
@@ -1422,10 +1563,15 @@ class AssistantTab(QWidget):
                 if scope == "both"
                 else "Listening for interviewer"
             )
+            if self._capture_exclusion_active:
+                capture_suffix = "Capture hidden"
+            elif self._capture_mode() == "visible":
+                capture_suffix = "Capture visible"
+            else:
+                capture_suffix = "⚠ Capture visible"
+
             self.activity_label.setText(
-                f"{listening_text} · Capture hidden"
-                if self._capture_exclusion_active
-                else f"{listening_text} · ⚠ Capture visible"
+                f"{listening_text} · {capture_suffix}"
             )
 
         self._refresh_answer_last_button()
@@ -1868,23 +2014,30 @@ class AssistantTab(QWidget):
                 if scope == "both"
                 else "Listening for interviewer"
             )
-            self.activity_label.setText(
-                f"{listening_text} · Capture hidden"
-                if self._capture_exclusion_active
-                else f"{listening_text} · ⚠ Capture visible"
-            )
-            self.activity_label.setToolTip(
-                (
+            if self._capture_exclusion_active:
+                capture_suffix = "Capture hidden"
+                capture_tip = (
                     "La ventana principal está excluida de capturas compatibles "
                     "mientras Stage 2 está activo."
                 )
-                if self._capture_exclusion_active
-                else (
-                    "Stage 2 sigue funcionando, pero Windows no pudo confirmar "
+            elif self._capture_mode() == "visible":
+                capture_suffix = "Capture visible"
+                capture_tip = (
+                    "Visible fue seleccionado por el usuario; la ventana puede "
+                    "aparecer normalmente en capturas."
+                )
+            else:
+                capture_suffix = "⚠ Capture visible"
+                capture_tip = (
+                    "Hidden fue solicitado, pero Windows no pudo confirmar "
                     "la exclusión de captura. "
                     + self._capture_exclusion_message
                 )
+
+            self.activity_label.setText(
+                f"{listening_text} · {capture_suffix}"
             )
+            self.activity_label.setToolTip(capture_tip)
             return
 
         if stopped:
