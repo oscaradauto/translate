@@ -5,8 +5,8 @@ Subtítulo:
     Faster-Whisper. No assistant logic is loaded or displayed.
 
 Asistente:
-    Independent technical-interview workspace for Stage 2. It has its own
-    language setting and will be connected to OpenAI separately.
+    Independent technical-interview workspace for Stage 2. It uses local
+    Faster-Whisper transcription plus Groq for technical answers.
 """
 
 from __future__ import annotations
@@ -1048,7 +1048,7 @@ class AssistantTab(QWidget):
         self.regenerate_button.setEnabled(False)
         self.copy_answer_button.setEnabled(False)
 
-    def _on_language_changed(self) -> None:
+    def _on_language_changed(self, _index: int = -1) -> None:
         controller = self.controller
         if controller is None:
             return
