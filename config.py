@@ -95,7 +95,7 @@ AI_PROVIDER = os.getenv("AI_PROVIDER", "groq")
 # mixed during the same interview.
 INTERVIEW_WHISPER_MODEL = os.getenv(
     "INTERVIEW_WHISPER_MODEL",
-    "base",
+    "small",
 )
 INTERVIEW_TRANSCRIPTION_LANGUAGE = os.getenv(
     "INTERVIEW_TRANSCRIPTION_LANGUAGE",
@@ -122,7 +122,7 @@ GROQ_REASONING_EFFORT = os.getenv(
     "medium",
 )
 GROQ_MAX_COMPLETION_TOKENS = int(
-    os.getenv("GROQ_MAX_COMPLETION_TOKENS", "420")
+    os.getenv("GROQ_MAX_COMPLETION_TOKENS", "180")
 )
 
 # Keep enough recent turns to resolve follow-up questions such as
@@ -134,7 +134,7 @@ INTERVIEW_CONTEXT_TURNS = int(
 # After the interviewer stops speaking, wait briefly before deciding whether
 # the turn contains a complete question.
 INTERVIEW_QUESTION_DEBOUNCE_SECONDS = float(
-    os.getenv("INTERVIEW_QUESTION_DEBOUNCE_SECONDS", "1.2")
+    os.getenv("INTERVIEW_QUESTION_DEBOUNCE_SECONDS", "1.6")
 )
 
 
