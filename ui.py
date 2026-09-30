@@ -1882,6 +1882,26 @@ class AssistantTab(QWidget):
             "Waiting for the question to finish..."
         )
 
+    def _set_answer_view_mode(self, coding: bool) -> None:
+        font_rule = (
+            'font-family: "Cascadia Mono", "Consolas", monospace; '
+            "font-size: 13px;"
+            if coding
+            else "font-size: 14px;"
+        )
+        self.answer_view.setStyleSheet(
+            f"""
+            QTextBrowser {{
+                background-color: {CARD_BG_SOFT};
+                color: {TEXT};
+                border: 1px solid rgba(77,166,255,45);
+                border-radius: 12px;
+                padding: 12px;
+                {font_rule}
+            }}
+            """
+        )
+
     def _capture_dynamic_layout_baseline(self) -> None:
         if self._dynamic_base_window_height is not None:
             return
@@ -1932,6 +1952,7 @@ class AssistantTab(QWidget):
             window.move(new_x, new_y)
 
     def _reset_answer_panel_layout(self) -> None:
+        self._set_answer_view_mode(False)
         self.transcript_view.setMinimumHeight(155)
         self.transcript_view.setMaximumHeight(16777215)
         self.answer_view.setMinimumHeight(135)
@@ -1956,6 +1977,7 @@ class AssistantTab(QWidget):
         self._dynamic_base_transcript_height = None
 
     def _prepare_coding_layout(self) -> None:
+        self._set_answer_view_mode(True)
         # Snapshot the normal layout once, then let every coding answer size
         # itself relative to that same baseline until we return to Technical.
         self._capture_dynamic_layout_baseline()
@@ -2136,6 +2158,8 @@ class AssistantTab(QWidget):
         if not self._answer_stream_started:
             self._answer_stream_started = True
             self._pending_answer_buffer = ""
+            self.copy_code_button.setEnabled(False)
+            self.copy_code_button.setVisible(False)
             self.answer_view.clear()
 
         self._pending_answer_buffer += delta
@@ -2150,6 +2174,7 @@ class AssistantTab(QWidget):
             self.answer_state.setText("Ready")
             self.regenerate_button.setEnabled(True)
             self.copy_answer_button.setEnabled(True)
+            self._refresh_copy_code_button()
             self.activity_label.setText("Answer ready")
             QTimer.singleShot(
                 0,
@@ -2164,6 +2189,7 @@ class AssistantTab(QWidget):
             )
             self.regenerate_button.setEnabled(bool(self._answer_buffer))
             self.copy_answer_button.setEnabled(bool(self._answer_buffer))
+            self._refresh_copy_code_button()
             self.activity_label.setText(
                 "No new answer generated"
             )
@@ -2178,6 +2204,7 @@ class AssistantTab(QWidget):
         self.answer_state.setText("Error")
         self.regenerate_button.setEnabled(bool(self._answer_buffer))
         self.copy_answer_button.setEnabled(bool(self._answer_buffer))
+        self._refresh_copy_code_button()
 
         if not self._answer_buffer:
             self.answer_view.setPlainText(f"Error: {text}")
@@ -2220,6 +2247,55 @@ class AssistantTab(QWidget):
             daemon=True,
         ).start()
 
+    @staticmethod
+    def _format_latency(value: float | None) -> str:
+        if value is None:
+            return "—"
+        if value >= 1000.0:
+            return f"{value / 1000.0:.1f}s"
+        return f"{value:.0f}ms"
+
+    def _refresh_latency_label(self) -> None:
+        self.latency_label.setText(
+            "STT "
+            + self._format_latency(self._latencies.get("stt"))
+            + "   Analyze "
+            + self._format_latency(self._latencies.get("analyze"))
+            + "   Answer "
+            + self._format_latency(self._latencies.get("answer"))
+        )
+
+    def _on_latency_updated(
+        self,
+        stage: str,
+        latency_ms: float,
+    ) -> None:
+        if stage not in self._latencies:
+            return
+        self._latencies[stage] = max(0.0, float(latency_ms))
+        self._refresh_latency_label()
+
+    def _refresh_health_label(self) -> None:
+        self.health_label.setText(
+            f"🎤 {self._health_state['mic']}   "
+            f"🔊 {self._health_state['system']}   "
+            f"Groq {self._health_state['groq']}"
+        )
+
+    def _set_health(
+        self,
+        mic: str | None = None,
+        system: str | None = None,
+        groq: str | None = None,
+    ) -> None:
+        if mic is not None:
+            self._health_state["mic"] = mic
+        if system is not None:
+            self._health_state["system"] = system
+        if groq is not None:
+            self._health_state["groq"] = groq
+        self._refresh_health_label()
+
     def _on_groq_check_completed(
         self,
         ready: bool,
@@ -2235,6 +2311,7 @@ class AssistantTab(QWidget):
         self.verify_groq_button.setToolTip(message)
 
         if ready:
+            self._set_health(groq="✓")
             self.verify_groq_button.setText("✓ Groq listo")
             self.activity_label.setText(
                 "Groq preflight passed"
@@ -2245,6 +2322,7 @@ class AssistantTab(QWidget):
                 message,
             )
         else:
+            self._set_health(groq="✕")
             self.verify_groq_button.setText("⚠ Verificar Groq")
             self.activity_label.setText(
                 "Groq preflight failed"
@@ -2256,6 +2334,7 @@ class AssistantTab(QWidget):
             )
 
     def _on_service_error(self, text: str) -> None:
+        self._set_health(groq="✕")
         is_rate_limit = "429" in text
         self.status_dot.setStyleSheet(
             f"color: {RED}; font-size: 9px; background: transparent;"
@@ -2336,6 +2415,40 @@ class AssistantTab(QWidget):
             ),
         )
 
+    @staticmethod
+    def _extract_code(answer: str) -> str:
+        if not answer:
+            return ""
+
+        match = re.search(
+            r"(?im)^\s*Code:\s*$",
+            answer,
+        )
+        if match is None:
+            return ""
+
+        return answer[match.end():].strip()
+
+    def _refresh_copy_code_button(self) -> None:
+        code = self._extract_code(self._answer_buffer)
+        available = bool(code)
+        self.copy_code_button.setVisible(available)
+        self.copy_code_button.setEnabled(available)
+
+    def _copy_code(self) -> None:
+        code = self._extract_code(self._answer_buffer)
+        if not code:
+            return
+
+        QApplication.clipboard().setText(code)
+        self.copy_code_button.setText("✓ Código copiado")
+        QTimer.singleShot(
+            1200,
+            lambda: self.copy_code_button.setText(
+                "📋 Copiar código"
+            ),
+        )
+
     def _on_status_changed(self, text: str) -> None:
         loading = text.startswith("Cargando")
         listening = text.startswith("Escuchando")
@@ -2344,6 +2457,7 @@ class AssistantTab(QWidget):
 
         if loading:
             self._starting = True
+            self._set_health(mic="…", system="…", groq="…")
             self.status_dot.setStyleSheet(
                 f"color: {WARNING}; font-size: 9px; background: transparent;"
             )
@@ -2357,6 +2471,12 @@ class AssistantTab(QWidget):
                 f"color: {GREEN}; font-size: 9px; background: transparent;"
             )
             self.status_label.setText("Listening")
+            if "solo micrófono" in text:
+                self._set_health(mic="✓", system="!", groq="✓")
+            elif "solo audio de reunión" in text:
+                self._set_health(mic="!", system="✓", groq="✓")
+            else:
+                self._set_health(mic="✓", system="✓", groq="✓")
             self.interview_button.setText("■  Detener")
             self.interview_button.setEnabled(True)
             scope = (
@@ -2409,6 +2529,7 @@ class AssistantTab(QWidget):
                 f"color: {MUTED_DARK}; font-size: 9px; background: transparent;"
             )
             self.status_label.setText("Ready")
+            self._set_health(mic="—", system="—")
             self.interview_button.setText("▶  Iniciar entrevista")
             self.interview_button.setEnabled(True)
             self.verify_groq_button.setEnabled(True)
@@ -2424,6 +2545,7 @@ class AssistantTab(QWidget):
                 f"color: {RED}; font-size: 9px; background: transparent;"
             )
             self.status_label.setText("Error")
+            self._set_health(mic="!", system="!", groq="!")
             self.interview_button.setText("▶  Iniciar entrevista")
             self.interview_button.setEnabled(True)
             self.verify_groq_button.setEnabled(True)
