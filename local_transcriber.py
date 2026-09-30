@@ -1,6 +1,7 @@
-"""Local Faster-Whisper transcription service for Stage 1.
+"""Configurable local Faster-Whisper transcription service.
 
-The service keeps one Whisper model loaded in memory and serializes inference so
+Stage 1 uses an English-only model. Stage 2 can use a multilingual model with
+automatic per-utterance language detection. Inference is serialized so
 microphone and system-audio captions do not compete for CPU/GPU resources.
 """
 
@@ -31,7 +32,7 @@ ErrorCallback = Callable[[str, Exception], None]
 
 
 class LocalWhisperTranscriber:
-    """Shared local transcription engine for all Stage 1 audio sources."""
+    """Shared configurable local transcription engine."""
 
     def __init__(
         self,
