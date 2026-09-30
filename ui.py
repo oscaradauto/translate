@@ -704,6 +704,7 @@ class AssistantTab(QWidget):
         self._transcript_order: list[tuple[str, int]] = []
         self._max_transcript_entries = 30
         self._answer_buffer = ""
+        self._understood_question_text = ""
         self._has_any_turn = False
         self._has_interviewer_turn = False
 
@@ -949,13 +950,21 @@ class AssistantTab(QWidget):
         self.regenerate_button.setEnabled(False)
         self.regenerate_button.clicked.connect(self._regenerate)
 
-        self.copy_answer_button = QPushButton("📋 Copiar")
+        self.copy_question_button = QPushButton("📋 Copiar pregunta")
+        self.copy_question_button.setStyleSheet(_button_style())
+        self.copy_question_button.setEnabled(False)
+        self.copy_question_button.clicked.connect(
+            self._copy_question
+        )
+
+        self.copy_answer_button = QPushButton("📋 Copiar respuesta")
         self.copy_answer_button.setStyleSheet(_button_style())
         self.copy_answer_button.setEnabled(False)
         self.copy_answer_button.clicked.connect(self._copy_answer)
 
         actions.addWidget(self.answer_last_button)
         actions.addWidget(self.regenerate_button)
+        actions.addWidget(self.copy_question_button)
         actions.addWidget(self.copy_answer_button)
         actions.addStretch()
 
@@ -1135,6 +1144,7 @@ class AssistantTab(QWidget):
         self._transcript_entries.clear()
         self._transcript_order.clear()
         self._answer_buffer = ""
+        self._understood_question_text = ""
         self._has_any_turn = False
         self._has_interviewer_turn = False
 
@@ -1149,6 +1159,7 @@ class AssistantTab(QWidget):
         self.understood_question.setText("Understood question: —")
         self.answer_last_button.setEnabled(False)
         self.regenerate_button.setEnabled(False)
+        self.copy_question_button.setEnabled(False)
         self.copy_answer_button.setEnabled(False)
 
     def _on_language_changed(self, _index: int = -1) -> None:
@@ -1272,12 +1283,14 @@ class AssistantTab(QWidget):
         # suggestion immediately so an answer to the old question is never
         # mistaken for the current one.
         self._answer_buffer = ""
+        self._understood_question_text = ""
         self.answer_view.setPlainText("Analyzing question...")
         self.answer_state.setText("Analyzing...")
         self.understood_question.setText(
             "Understood question: analyzing..."
         )
         self.regenerate_button.setEnabled(False)
+        self.copy_question_button.setEnabled(False)
         self.copy_answer_button.setEnabled(False)
         self.activity_label.setText(
             "Analyzing question..."
@@ -1296,8 +1309,12 @@ class AssistantTab(QWidget):
             details.append(language.upper())
 
         suffix = f"  ·  {' · '.join(details)}" if details else ""
+        self._understood_question_text = question.strip()
         self.understood_question.setText(
             f"Understood question: {question}{suffix}"
+        )
+        self.copy_question_button.setEnabled(
+            bool(self._understood_question_text)
         )
 
     def _on_question_waiting(self, text: str) -> None:
@@ -1364,15 +1381,32 @@ class AssistantTab(QWidget):
         if self.controller is not None:
             self.controller.regenerate()
 
+    def _copy_question(self) -> None:
+        if not self._understood_question_text:
+            return
+
+        QApplication.clipboard().setText(
+            self._understood_question_text
+        )
+        self.copy_question_button.setText("✓ Pregunta copiada")
+        QTimer.singleShot(
+            1200,
+            lambda: self.copy_question_button.setText(
+                "📋 Copiar pregunta"
+            ),
+        )
+
     def _copy_answer(self) -> None:
         if not self._answer_buffer:
             return
 
         QApplication.clipboard().setText(self._answer_buffer)
-        self.copy_answer_button.setText("✓ Copiado")
+        self.copy_answer_button.setText("✓ Respuesta copiada")
         QTimer.singleShot(
             1200,
-            lambda: self.copy_answer_button.setText("📋 Copiar"),
+            lambda: self.copy_answer_button.setText(
+                "📋 Copiar respuesta"
+            ),
         )
 
     def _on_status_changed(self, text: str) -> None:
