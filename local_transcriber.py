@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import threading
+import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Callable
 
@@ -38,11 +39,17 @@ class LocalWhisperTranscriber:
         on_final: FinalCallback,
         on_status: StatusCallback | None = None,
         on_error: ErrorCallback | None = None,
+        model_name: str = WHISPER_MODEL,
+        language: str | None = "en",
+        initial_prompt: str | None = WHISPER_INITIAL_PROMPT,
     ) -> None:
         self.on_partial = on_partial
         self.on_final = on_final
         self.on_status = on_status
         self.on_error = on_error
+        self.model_name = model_name
+        self.language = language
+        self.initial_prompt = initial_prompt
 
         self._model: WhisperModel | None = None
         self._executor: ThreadPoolExecutor | None = None
@@ -61,13 +68,14 @@ class LocalWhisperTranscriber:
         if self._running:
             return
 
+        language_label = self.language or "auto"
         self._notify_status(
-            f"Cargando Faster-Whisper ({WHISPER_MODEL})..."
+            f"Cargando Faster-Whisper ({self.model_name}, {language_label})..."
         )
 
         try:
             self._model = WhisperModel(
-                WHISPER_MODEL,
+                self.model_name,
                 device=WHISPER_DEVICE,
                 compute_type=WHISPER_COMPUTE_TYPE,
                 cpu_threads=WHISPER_CPU_THREADS,
@@ -182,14 +190,14 @@ class LocalWhisperTranscriber:
 
         segments, _ = model.transcribe(
             audio,
-            language="en",
+            language=self.language,
             beam_size=1,
             best_of=1,
             temperature=0.0,
             vad_filter=False,
             condition_on_previous_text=False,
             without_timestamps=True,
-            initial_prompt=WHISPER_INITIAL_PROMPT,
+            initial_prompt=self.initial_prompt or None,
         )
 
         parts = [
@@ -281,7 +289,13 @@ class LocalWhisperTranscriber:
         curr_words = current.split()
 
         def normalized(word: str) -> str:
-            return re.sub(r"[^a-z0-9]+", "", word.casefold())
+            folded = unicodedata.normalize("NFD", word.casefold())
+            folded = "".join(
+                char
+                for char in folded
+                if unicodedata.category(char) != "Mn"
+            )
+            return re.sub(r"[^a-z0-9]+", "", folded)
 
         max_overlap = min(14, len(prev_words), len(curr_words))
         for count in range(max_overlap, 0, -1):
