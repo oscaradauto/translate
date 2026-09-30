@@ -1,0 +1,9 @@
+# Stage 1 - local English live subtitles
+PyQt6
+numpy
+scipy
+soundcard
+PyAudio
+webrtcvad-wheels
+faster-whisper
+python-dotenv

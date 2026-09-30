@@ -1,380 +1,769 @@
-import sounddevice as sd
-import soundcard as sc
-import numpy as np
-import torch
-import queue
+"""Audio capture and orchestration for Stage 1 live English subtitles.
+
+Stage 1 is intentionally local and contains no assistant logic:
+MICROPHONE -> YOU
+SYSTEM AUDIO -> MEETING
+AUDIO -> WebRTC VAD -> Faster-Whisper -> English captions
+"""
+
+from __future__ import annotations
+
 import threading
 import time
+from collections import deque
+from typing import Callable
 
-from RealtimeSTT import AudioToTextRecorder
+import numpy as np
+import pyaudio
+import soundcard as sc
+import webrtcvad
+from scipy.signal import resample_poly
 
-from assistant import is_question, answer_question, warmup
-from config import get_language_mode, get_assistant_enabled, native_model_lock, get_assistant_listen_mode
-from transcriber import transcribe_audio
-from translator import translate_text
+from config import (
+    LOCAL_SPEECH_GATE_HOLD_MS,
+    MEETING_MIN_VOICED_MS,
+    MEETING_SPEECH_START_MS,
+    MEETING_VAD_MODE,
+    MIC_DEVICE_INDEX,
+    MIC_MIN_DBFS,
+    MIC_MIN_VOICED_MS,
+    MIC_SPEECH_START_MS,
+    MIC_VAD_MODE,
+    SUBTITLE_MAX_UTTERANCE_SECONDS,
+    SUBTITLE_PARTIAL_INTERVAL_SECONDS,
+    SUBTITLE_PARTIAL_MIN_SECONDS,
+    SUBTITLE_SPEECH_END_MS,
+    WHISPER_PARTIAL_WINDOW_SECONDS,
+    WHISPER_INITIAL_PROMPT,
+    WHISPER_MODEL,
+)
+from local_transcriber import LocalWhisperTranscriber
 
 TARGET_SAMPLE_RATE = 16000
-MIC_BLOCK_SIZE = 512
-SILENCE_TIMEOUT = 0.5
-MIN_SPEECH_DURATION = 0.3
-VAD_THRESHOLD = 0.5
-MIC_DEVICE_INDEX = 1  # Headset Microphone (Jabra EVOLVE)
-LOOPBACK_BLOCK_FRAMES = 1536
+PREFERRED_MIC_SAMPLE_RATE = 48000
+FALLBACK_MIC_SAMPLE_RATE = 16000
+SYSTEM_SAMPLE_RATE = 48000
+VAD_FRAME_MS = 30
+PRE_ROLL_MS = 240
 
-# Parámetros del streaming en tiempo real para tu propia voz (RealtimeSTT)
-REALTIME_MODEL = "small"
-REALTIME_POST_SPEECH_SILENCE = 0.4
-
-print("Cargando modelo VAD (silero-vad)...")
-vad_model, utils = torch.hub.load(
-    repo_or_dir='snakers4/silero-vad',
-    model='silero_vad',
-    force_reload=False,
-    trust_repo=True
-)
-print("Modelo VAD cargado.")
+_PRE_ROLL_FRAMES = max(1, PRE_ROLL_MS // VAD_FRAME_MS)
 
 
-def _resample_linear(block, orig_sr, target_sr):
-    if orig_sr == target_sr or len(block) == 0:
-        return block.astype(np.float32)
-    duration = len(block) / orig_sr
-    target_len = max(1, int(round(duration * target_sr)))
-    x_old = np.linspace(0, duration, num=len(block), endpoint=False)
-    x_new = np.linspace(0, duration, num=target_len, endpoint=False)
-    return np.interp(x_new, x_old, block).astype(np.float32)
+class _LocalSpeechGate:
+    """Coordinates source ownership between microphone and meeting loopback.
 
-
-class RealtimeMicStreamer:
-    """
-    Captura tu micrófono con streaming en tiempo real (RealtimeSTT).
-    Entrega texto parcial mientras hablas (on_partial_text) y la frase ya
-    cerrada/limpia cuando terminas (on_final_text), similar al comportamiento
-    de Microsoft Teams. El idioma de reconocimiento coincide siempre con el
-    modo de reunión seleccionado ("en" o "es").
+    When the physical microphone detects local speech, YOU wins for a short
+    interval. The meeting loopback is suppressed during that interval so a
+    locally spoken sentence cannot also be emitted as MEETING.
     """
 
-    def __init__(self, source_label, device_index, on_partial_text, on_final_text, language="en"):
-        self.source_label = source_label
-        self.device_index = device_index
-        self.on_partial_text = on_partial_text
-        self.on_final_text = on_final_text
-        self.language = language
-        self.running = False
-        self.thread = None
-        self.recorder = None
+    def __init__(self, hold_ms: int) -> None:
+        self._hold_seconds = max(0.0, hold_ms / 1000.0)
+        self._active_until = 0.0
+        self._lock = threading.Lock()
 
-    def _on_partial(self, text):
-        if text:
-            self.on_partial_text(self.source_label, text)
+    def mark_local_speech(self, now: float) -> None:
+        with self._lock:
+            self._active_until = max(
+                self._active_until,
+                now + self._hold_seconds,
+            )
 
-    def start(self):
-        self.running = True
-        self.recorder = AudioToTextRecorder(
-            model=REALTIME_MODEL,
-            language=self.language,
-            spinner=False,
-            enable_realtime_transcription=True,
-            on_realtime_transcription_update=self._on_partial,
-            use_microphone=True,
-            input_device_index=self.device_index,
-            post_speech_silence_duration=REALTIME_POST_SPEECH_SILENCE,
+    def is_local_speech_active(self, now: float) -> bool:
+        with self._lock:
+            return now <= self._active_until
+
+
+def _pcm16_to_float32(pcm16: bytes) -> np.ndarray:
+    return np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0
+
+
+def _float32_to_pcm16(audio: np.ndarray) -> bytes:
+    clipped = np.clip(audio, -1.0, 1.0)
+    return (clipped * 32767.0).astype(np.int16).tobytes()
+
+
+def _resample_pcm16(pcm16: bytes, source_rate: int) -> bytes:
+    if not pcm16:
+        return b""
+    if source_rate == TARGET_SAMPLE_RATE:
+        return pcm16
+
+    audio = _pcm16_to_float32(pcm16)
+    gcd = int(np.gcd(source_rate, TARGET_SAMPLE_RATE))
+    up = TARGET_SAMPLE_RATE // gcd
+    down = source_rate // gcd
+    resampled = resample_poly(audio, up, down)
+    return _float32_to_pcm16(resampled.astype(np.float32))
+
+
+def _is_speech(pcm16: bytes, sample_rate: int, vad: webrtcvad.Vad) -> bool:
+    frame_bytes = int(sample_rate * VAD_FRAME_MS / 1000) * 2
+    if len(pcm16) != frame_bytes:
+        return False
+    try:
+        return vad.is_speech(pcm16, sample_rate)
+    except Exception:
+        return False
+
+
+def _dbfs(pcm16: bytes) -> float:
+    """Return RMS level in dBFS for a PCM16 mono frame."""
+    if not pcm16:
+        return -96.0
+
+    samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32)
+    if samples.size == 0:
+        return -96.0
+
+    rms = float(np.sqrt(np.mean(samples * samples)))
+    if rms <= 1.0:
+        return -96.0
+
+    return 20.0 * np.log10(rms / 32768.0)
+
+
+class _SpeechSegmenter:
+    """Builds stable utterances and periodically requests live partial captions."""
+
+    def __init__(
+        self,
+        source: str,
+        transcriber: LocalWhisperTranscriber,
+        next_segment_id: Callable[[], int],
+        speech_start_ms: int,
+        min_voiced_ms: int,
+        speech_end_ms: int = SUBTITLE_SPEECH_END_MS,
+        max_utterance_seconds: float = SUBTITLE_MAX_UTTERANCE_SECONDS,
+        partials_enabled: bool = True,
+    ) -> None:
+        self.source = source
+        self.transcriber = transcriber
+        self.next_segment_id = next_segment_id
+        self._speech_end_ms = speech_end_ms
+        self._max_utterance_seconds = max_utterance_seconds
+        self._partials_enabled = partials_enabled
+        self._speech_start_frames = max(
+            1,
+            int(np.ceil(speech_start_ms / VAD_FRAME_MS)),
         )
-        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self._min_voiced_frames = max(
+            1,
+            int(np.ceil(min_voiced_ms / VAD_FRAME_MS)),
+        )
+
+        self._pre_roll: deque[bytes] = deque(maxlen=_PRE_ROLL_FRAMES)
+        self._frames: list[bytes] = []
+        self._speech_active = False
+        self._segment_id: int | None = None
+        self._last_speech_time = 0.0
+        self._last_partial_time = 0.0
+        self._speech_candidate_frames = 0
+        self._voiced_frames = 0
+
+    def process(self, pcm16_target: bytes, is_speech: bool, now: float) -> None:
+        if not pcm16_target:
+            return
+
+        if not self._speech_active:
+            self._pre_roll.append(pcm16_target)
+
+            if is_speech:
+                self._speech_candidate_frames += 1
+            else:
+                self._speech_candidate_frames = 0
+                return
+
+            # One noisy frame is not enough to create a caption. Requiring
+            # consecutive voiced frames prevents false YOU segments.
+            if self._speech_candidate_frames < self._speech_start_frames:
+                return
+
+            self._speech_active = True
+            self._segment_id = self.next_segment_id()
+            self._frames = list(self._pre_roll)
+            self._pre_roll.clear()
+            self._voiced_frames = self._speech_candidate_frames
+            self._speech_candidate_frames = 0
+            self._last_speech_time = now
+            self._last_partial_time = now
+            return
+
+        self._frames.append(pcm16_target)
+
+        if is_speech:
+            self._voiced_frames += 1
+            self._last_speech_time = now
+
+        duration_seconds = (
+            len(self._frames) * VAD_FRAME_MS / 1000.0
+        )
+
+        if (
+            self._partials_enabled
+            and duration_seconds >= SUBTITLE_PARTIAL_MIN_SECONDS
+            and self._voiced_frames >= self._min_voiced_frames
+            and now - self._last_partial_time
+            >= SUBTITLE_PARTIAL_INTERVAL_SECONDS
+        ):
+            self._last_partial_time = now
+            self._submit_partial()
+
+        silence_ms = (now - self._last_speech_time) * 1000
+        if silence_ms >= self._speech_end_ms:
+            self._finalize()
+        elif duration_seconds >= self._max_utterance_seconds:
+            # Long monologues are split into readable caption blocks.
+            self._finalize()
+
+    def flush(self) -> None:
+        if self._speech_active and self._frames:
+            self._finalize()
+
+    def abort(self) -> None:
+        """Drop the current candidate/utterance without transcribing it."""
+        self._speech_active = False
+        self._segment_id = None
+        self._frames = []
+        self._last_speech_time = 0.0
+        self._last_partial_time = 0.0
+        self._speech_candidate_frames = 0
+        self._voiced_frames = 0
+        self._pre_roll.clear()
+
+    def _submit_partial(self) -> None:
+        if self._segment_id is None or not self._frames:
+            return
+
+        window_frames = max(
+            1,
+            int(
+                np.ceil(
+                    WHISPER_PARTIAL_WINDOW_SECONDS
+                    * 1000
+                    / VAD_FRAME_MS
+                )
+            ),
+        )
+        rolling_frames = self._frames[-window_frames:]
+
+        self.transcriber.submit_partial(
+            self.source,
+            self._segment_id,
+            b"".join(rolling_frames),
+        )
+
+    def _finalize(self) -> None:
+        segment_id = self._segment_id
+        frames = self._frames
+        voiced_frames = self._voiced_frames
+
+        self._speech_active = False
+        self._segment_id = None
+        self._frames = []
+        self._last_speech_time = 0.0
+        self._last_partial_time = 0.0
+        self._speech_candidate_frames = 0
+        self._voiced_frames = 0
+        self._pre_roll.clear()
+
+        if segment_id is None or not frames:
+            return
+
+        # Do not send tiny noise bursts to Whisper. Those bursts are a common
+        # source of hallucinations such as "So," or "Now," on silent mics.
+        if voiced_frames < self._min_voiced_frames:
+            return
+
+        self.transcriber.submit_final(
+            self.source,
+            segment_id,
+            b"".join(frames),
+        )
+
+
+class LocalMicStreamer:
+    """Captures the physical microphone and feeds the local STT engine."""
+
+    def __init__(
+        self,
+        device_index: int,
+        transcriber: LocalWhisperTranscriber,
+        next_segment_id: Callable[[], int],
+        local_speech_gate: _LocalSpeechGate,
+        on_error,
+        speech_end_ms: int = SUBTITLE_SPEECH_END_MS,
+        max_utterance_seconds: float = SUBTITLE_MAX_UTTERANCE_SECONDS,
+        partials_enabled: bool = True,
+    ) -> None:
+        self.device_index = device_index
+        self.transcriber = transcriber
+        self.next_segment_id = next_segment_id
+        self.local_speech_gate = local_speech_gate
+        self.on_error = on_error
+        self.speech_end_ms = speech_end_ms
+        self.max_utterance_seconds = max_utterance_seconds
+        self.partials_enabled = partials_enabled
+
+        self.running = False
+        self.thread: threading.Thread | None = None
+        self.audio: pyaudio.PyAudio | None = None
+        self.stream = None
+        self.sample_rate: int | None = None
+
+    def start(self) -> None:
+        if self.running:
+            return
+
+        self.audio = pyaudio.PyAudio()
+        try:
+            self.stream = self._open_microphone_stream()
+        except Exception:
+            self.audio.terminate()
+            self.audio = None
+            raise
+
+        self.running = True
+        self.thread = threading.Thread(
+            target=self._capture_loop,
+            name="microphone-capture",
+            daemon=True,
+        )
         self.thread.start()
 
-    def _loop(self):
-        while self.running:
-            try:
-                sentence = self.recorder.text()
-            except Exception as e:
-                if self.running:
-                    print(f"[{self.source_label}] RealtimeSTT error: {e}")
-                continue
-            if sentence and sentence.strip():
-                self.on_final_text(self.source_label, sentence.strip())
+    def _open_microphone_stream(self):
+        errors: list[str] = []
 
-    def stop(self):
+        device_index = self.device_index
+        if device_index < 0:
+            try:
+                device_index = int(
+                    self.audio.get_default_input_device_info()["index"]
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"No se pudo detectar el micrófono predeterminado: {exc}"
+                ) from exc
+
+        try:
+            device_info = self.audio.get_device_info_by_index(device_index)
+            device_name = device_info.get("name", f"device {device_index}")
+            max_inputs = int(device_info.get("maxInputChannels", 0))
+            if max_inputs < 1:
+                raise RuntimeError(
+                    f"El dispositivo #{device_index} no es un dispositivo de entrada."
+                )
+            print(f"[Audio:YOU] Micrófono #{device_index}: {device_name}")
+        except Exception as exc:
+            raise RuntimeError(
+                f"No se pudo validar el micrófono #{device_index}: {exc}"
+            ) from exc
+
+        self.device_index = device_index
+
+        for sample_rate in (
+            PREFERRED_MIC_SAMPLE_RATE,
+            FALLBACK_MIC_SAMPLE_RATE,
+        ):
+            frames = int(sample_rate * VAD_FRAME_MS / 1000)
+            try:
+                stream = self.audio.open(
+                    format=pyaudio.paInt16,
+                    channels=1,
+                    rate=sample_rate,
+                    input=True,
+                    input_device_index=device_index,
+                    frames_per_buffer=frames,
+                )
+                self.sample_rate = sample_rate
+                return stream
+            except Exception as exc:
+                errors.append(str(exc))
+
+        raise RuntimeError(
+            "No se pudo abrir el micrófono. "
+            + " | ".join(errors[-2:])
+        )
+
+    def _capture_loop(self) -> None:
+        assert self.sample_rate is not None
+        vad = webrtcvad.Vad(MIC_VAD_MODE)
+        segmenter = _SpeechSegmenter(
+            "YOU",
+            self.transcriber,
+            self.next_segment_id,
+            speech_start_ms=MIC_SPEECH_START_MS,
+            min_voiced_ms=MIC_MIN_VOICED_MS,
+            speech_end_ms=self.speech_end_ms,
+            max_utterance_seconds=self.max_utterance_seconds,
+            partials_enabled=self.partials_enabled,
+        )
+        frame_count = int(self.sample_rate * VAD_FRAME_MS / 1000)
+
+        try:
+            while self.running:
+                pcm16 = self.stream.read(
+                    frame_count,
+                    exception_on_overflow=False,
+                )
+                now = time.monotonic()
+                target_pcm16 = _resample_pcm16(
+                    pcm16,
+                    self.sample_rate,
+                )
+                speech = (
+                    _is_speech(target_pcm16, TARGET_SAMPLE_RATE, vad)
+                    and _dbfs(target_pcm16) >= MIC_MIN_DBFS
+                )
+
+                if speech:
+                    # The physical mic is the source of truth for YOU.
+                    self.local_speech_gate.mark_local_speech(now)
+
+                segmenter.process(target_pcm16, speech, now)
+        except Exception as exc:
+            if self.running:
+                self.on_error("YOU", exc)
+        finally:
+            segmenter.flush()
+
+    def stop(self) -> None:
         self.running = False
-        if self.recorder:
+
+        if self.stream is not None:
             try:
-                self.recorder.stop()
-            except Exception as e:
-                print(f"[{self.source_label}] Error al detener grabación: {e}")
+                self.stream.stop_stream()
+            except Exception:
+                pass
             try:
-                self.recorder.shutdown()
-            except Exception as e:
-                print(f"[{self.source_label}] Error al cerrar RealtimeSTT: {e}")
-        if self.thread:
+                self.stream.close()
+            except Exception:
+                pass
+            self.stream = None
+
+        if self.thread and self.thread.is_alive():
             self.thread.join(timeout=2.0)
+        self.thread = None
+
+        if self.audio is not None:
+            try:
+                self.audio.terminate()
+            except Exception:
+                pass
+            self.audio = None
 
 
-class LoopbackVADStreamer:
-    """Captura el audio de salida del sistema (voces de compañeros) usando 'soundcard'."""
+class LocalSystemAudioStreamer:
+    """Captures Windows speaker loopback audio for the remote meeting."""
 
-    def __init__(self, source_label, on_speech_segment, on_error=None):
-        self.source_label = source_label
-        self.on_speech_segment = on_speech_segment
+    def __init__(
+        self,
+        transcriber: LocalWhisperTranscriber,
+        next_segment_id: Callable[[], int],
+        local_speech_gate: _LocalSpeechGate,
+        on_error,
+        speech_end_ms: int = SUBTITLE_SPEECH_END_MS,
+        max_utterance_seconds: float = SUBTITLE_MAX_UTTERANCE_SECONDS,
+        partials_enabled: bool = True,
+    ) -> None:
+        self.transcriber = transcriber
+        self.next_segment_id = next_segment_id
+        self.local_speech_gate = local_speech_gate
         self.on_error = on_error
-        self.audio_queue = queue.Queue(maxsize=400)
+        self.speech_end_ms = speech_end_ms
+        self.max_utterance_seconds = max_utterance_seconds
+        self.partials_enabled = partials_enabled
         self.running = False
-        self.capture_thread = None
-        self.processing_thread = None
-        self.samplerate = 48000
+        self.thread: threading.Thread | None = None
 
-    def start(self):
+    def start(self) -> None:
+        if self.running:
+            return
+
+        # Validate a loopback source before reporting the streamer as started.
+        speaker = sc.default_speaker()
+        sc.get_microphone(speaker.name, include_loopback=True)
+
         self.running = True
-        self.capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
-        self.capture_thread.start()
-        self.processing_thread = threading.Thread(target=self._process_loop, daemon=True)
-        self.processing_thread.start()
+        self.thread = threading.Thread(
+            target=self._capture_loop,
+            name="system-audio-capture",
+            daemon=True,
+        )
+        self.thread.start()
 
-    def stop(self):
-        self.running = False
+    def _capture_loop(self) -> None:
+        vad = webrtcvad.Vad(MEETING_VAD_MODE)
+        segmenter = _SpeechSegmenter(
+            "MEETING",
+            self.transcriber,
+            self.next_segment_id,
+            speech_start_ms=MEETING_SPEECH_START_MS,
+            min_voiced_ms=MEETING_MIN_VOICED_MS,
+            speech_end_ms=self.speech_end_ms,
+            max_utterance_seconds=self.max_utterance_seconds,
+            partials_enabled=self.partials_enabled,
+        )
 
-    def _capture_loop(self):
         try:
             speaker = sc.default_speaker()
-            mic = sc.get_microphone(speaker.name, include_loopback=True)
-            with mic.recorder(samplerate=self.samplerate) as recorder:
+            loopback_mic = sc.get_microphone(
+                speaker.name,
+                include_loopback=True,
+            )
+
+            with loopback_mic.recorder(
+                samplerate=SYSTEM_SAMPLE_RATE
+            ) as recorder:
                 while self.running:
-                    data = recorder.record(numframes=LOOPBACK_BLOCK_FRAMES)
-                    mono = data.mean(axis=1) if data.ndim > 1 else data
-                    try:
-                        self.audio_queue.put_nowait(mono.copy())
-                    except queue.Full:
-                        pass
-        except Exception as e:
-            self.running = False
-            if self.on_error:
-                self.on_error(e)
+                    data = recorder.record(
+                        numframes=int(
+                            SYSTEM_SAMPLE_RATE
+                            * VAD_FRAME_MS
+                            / 1000
+                        )
+                    )
+                    mono = (
+                        data.mean(axis=1)
+                        if data.ndim > 1
+                        else data
+                    )
+                    pcm16 = _float32_to_pcm16(mono)
+                    target_pcm16 = _resample_pcm16(
+                        pcm16,
+                        SYSTEM_SAMPLE_RATE,
+                    )
+                    now = time.monotonic()
 
-    def _process_loop(self):
-        _run_vad_loop(self.audio_queue, self.samplerate, self.source_label,
-                      self.on_speech_segment, lambda: self.running)
+                    # If the physical microphone is currently detecting the
+                    # local user, YOU owns this time window. Drop loopback
+                    # audio instead of allowing the same voice to be labelled
+                    # as a remote meeting participant.
+                    if self.local_speech_gate.is_local_speech_active(now):
+                        segmenter.abort()
+                        continue
 
+                    speech = _is_speech(
+                        target_pcm16,
+                        TARGET_SAMPLE_RATE,
+                        vad,
+                    )
+                    segmenter.process(
+                        target_pcm16,
+                        speech,
+                        now,
+                    )
+        except Exception as exc:
+            if self.running:
+                self.on_error("MEETING", exc)
+        finally:
+            segmenter.flush()
 
-def _run_vad_loop(audio_queue, samplerate, source_label, on_speech_segment, is_running):
-    speech_buffer = []
-    silence_duration = 0.0
-    is_speaking = False
-    resample_carry = np.array([], dtype=np.float32)
-    REQUIRED_SAMPLES = 512
-
-    while is_running():
-        try:
-            block = audio_queue.get(timeout=1)
-        except queue.Empty:
-            continue
-
-        block_16k = _resample_linear(block, samplerate, TARGET_SAMPLE_RATE)
-        if len(block_16k) == 0:
-            continue
-
-        resample_carry = np.concatenate([resample_carry, block_16k])
-
-        while len(resample_carry) >= REQUIRED_SAMPLES:
-            chunk = resample_carry[:REQUIRED_SAMPLES]
-            resample_carry = resample_carry[REQUIRED_SAMPLES:]
-
-            block_duration = REQUIRED_SAMPLES / TARGET_SAMPLE_RATE
-            audio_tensor = torch.from_numpy(chunk)
-            try:
-                with native_model_lock:
-                    speech_prob = vad_model(audio_tensor, TARGET_SAMPLE_RATE).item()
-            except Exception as e:
-                print(f"[{source_label}] VAD error: {e}")
-                continue
-
-            if speech_prob >= VAD_THRESHOLD:
-                is_speaking = True
-                silence_duration = 0.0
-                speech_buffer.append(chunk)
-            else:
-                if is_speaking:
-                    silence_duration += block_duration
-                    speech_buffer.append(chunk)
-
-                    if silence_duration >= SILENCE_TIMEOUT:
-                        full_audio = np.concatenate(speech_buffer)
-                        duration = len(full_audio) / TARGET_SAMPLE_RATE
-
-                        if duration >= MIN_SPEECH_DURATION and on_speech_segment:
-                            on_speech_segment(full_audio, source_label)
-
-                        speech_buffer = []
-                        is_speaking = False
-                        silence_duration = 0.0
+    def stop(self) -> None:
+        self.running = False
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=2.0)
+        self.thread = None
 
 
 class ListenerController:
-    """
-    Reglas de negocio:
-    - El subtítulo EN es independiente del estado del asistente: se muestra siempre
-      que la reunión esté en modo Inglés (get_language_mode() == "en"), sin importar
-      si el asistente está ON u OFF.
-    - Reunión en Español -> nunca se muestran subtítulos.
-    - El subtítulo ES se traduce de forma asíncrona con DeepSeek a partir del EN,
-      sin bloquear ni retrasar la aparición del subtítulo EN (evita el desface
-      que existía antes con DeepL). Si llega tarde (ya hay un segmento más nuevo
-      mostrado), la UI la descarta usando el segment_id.
-    - Las tarjetas de Pregunta/Respuesta dependen SOLO del estado del asistente
-      (get_assistant_enabled()), y responden SIEMPRE en el idioma configurado
-      (get_language_mode), sin importar quién preguntó ni el idioma de reunión.
-    - Quién puede disparar preguntas al asistente se controla con config.ASSISTANT_LISTEN_MODE
-      ("compañeros", "yo", "ambos")
-    - Cada segmento de audio lleva un segment_id incremental (global, compartido entre fuentes)
-      usado solo como identificador único; el control de "no mostrar resultados viejos" se hace
-      en la UI de forma independiente por fuente, para que "Tú" y "Compañeros" no se bloqueen entre sí
-    - El flujo de pregunta/respuesta: se muestra la pregunta detectada, luego "Pensando...",
-      luego la respuesta (o un mensaje de error), sin pasos intermedios de conexión
-    - Tu propia voz ("Tú") se procesa en streaming en tiempo real (RealtimeSTT), usando el idioma
-      de reconocimiento correspondiente al modo de reunión seleccionado (get_language_mode)
-    - La voz de "Compañeros" sigue el flujo VAD + Whisper por segmento (loopback)
-    - Cambiar el idioma de reunión (EN/ES) mientras la app está corriendo reinicia SOLO el
-      streamer del micrófono (restart_mic_language), sin afectar el loopback de "Compañeros"
-    """
+    """Coordinates local transcription for microphone and system audio."""
 
-    def __init__(self, callbacks: dict, mic_device=MIC_DEVICE_INDEX):
+    def __init__(
+        self,
+        callbacks,
+        mic_device: int = MIC_DEVICE_INDEX,
+        whisper_model: str = WHISPER_MODEL,
+        transcription_language: str | None = "en",
+        initial_prompt: str | None = WHISPER_INITIAL_PROMPT,
+        transcriber_factory=None,
+        speech_end_ms: int = SUBTITLE_SPEECH_END_MS,
+        max_utterance_seconds: float = SUBTITLE_MAX_UTTERANCE_SECONDS,
+        partials_enabled: bool = True,
+        engine_label: str = "Faster-Whisper local",
+    ):
         self.callbacks = callbacks
         self.mic_device = mic_device
-        self.mic_streamer = None
-        self.loopback_streamer = None
+        self.whisper_model = whisper_model
+        self.transcription_language = transcription_language
+        self.initial_prompt = initial_prompt
+        self.transcriber_factory = transcriber_factory
+        self.speech_end_ms = speech_end_ms
+        self.max_utterance_seconds = max_utterance_seconds
+        self.partials_enabled = partials_enabled
+        self.engine_label = engine_label
+
+        self.running = False
+        self.mic_streamer: LocalMicStreamer | None = None
+        self.loopback_streamer: LocalSystemAudioStreamer | None = None
+        self.transcriber: LocalWhisperTranscriber | None = None
+
         self._segment_counter = 0
         self._counter_lock = threading.Lock()
-        self._assistant_busy = threading.Event()
+        self._local_speech_gate = _LocalSpeechGate(
+            LOCAL_SPEECH_GATE_HOLD_MS
+        )
 
-    def _next_segment_id(self):
+    def _next_segment_id(self) -> int:
         with self._counter_lock:
             self._segment_counter += 1
             return self._segment_counter
 
-    def _emit(self, name, *args):
-        cb = self.callbacks.get(name)
-        if cb:
-            cb(*args)
+    def _on_partial(
+        self,
+        source: str,
+        text: str,
+        segment_id: int,
+    ) -> None:
+        if self.running and text:
+            self._emit(
+                "on_subtitle_partial",
+                source,
+                text,
+                segment_id,
+            )
 
-    def _should_trigger_assistant(self, source_label):
-        mode = get_assistant_listen_mode()
-        if mode == "ambos":
-            return True
-        if mode == "compañeros":
-            return source_label == "Compañeros"
-        if mode == "yo":
-            return source_label == "Tú"
-        return False
+    def _on_final(
+        self,
+        source: str,
+        text: str,
+        segment_id: int,
+    ) -> None:
+        if self.running and len(text.strip()) >= 2:
+            self._emit(
+                "on_subtitle",
+                source,
+                text.strip(),
+                segment_id,
+            )
 
-    def _handle_question(self, source, text):
-        if self._assistant_busy.is_set():
-            print("[Assistant] Ya hay una pregunta en proceso, se ignora esta.")
+    def _on_transcription_error(
+        self,
+        source: str,
+        exc: Exception,
+    ) -> None:
+        print(f"[FasterWhisper:{source}] {exc}")
+
+    def _on_capture_error(self, source: str, exc: Exception) -> None:
+        print(f"[Audio:{source}] {exc}")
+
+    def start(self) -> None:
+        if self.running:
             return
-        self._assistant_busy.set()
+
+        self.running = True
+        self._emit("on_status", "Cargando modelo local...")
+
         try:
-            self._emit("on_question", source, text)
-            self._emit("on_assistant_state", "Pensando...")
-
-            answer = answer_question(text)
-
-            if answer:
-                self._emit("on_answer", answer)
+            if self.transcriber_factory is not None:
+                self.transcriber = self.transcriber_factory(
+                    on_partial=self._on_partial,
+                    on_final=self._on_final,
+                    on_status=lambda text: self._emit(
+                        "on_status",
+                        text,
+                    ),
+                    on_error=self._on_transcription_error,
+                )
             else:
-                self._emit("on_answer_error",
-                           "No se pudo obtener respuesta (servicio no disponible). Intenta de nuevo.")
-        finally:
-            self._assistant_busy.clear()
+                self.transcriber = LocalWhisperTranscriber(
+                    on_partial=self._on_partial,
+                    on_final=self._on_final,
+                    on_status=lambda text: self._emit(
+                        "on_status",
+                        text,
+                    ),
+                    on_error=self._on_transcription_error,
+                    model_name=self.whisper_model,
+                    language=self.transcription_language,
+                    initial_prompt=self.initial_prompt,
+                )
 
-    def _handle_subtitle(self, source, text, segment_id):
-        # 1. Emite el subtítulo EN de inmediato, sin esperar la traducción
-        self._emit("on_subtitle", source, text, segment_id)
-
-        # 2. Traduce en un hilo separado y emite un evento independiente
-        #    cuando esté lista, sin bloquear ni retrasar el subtítulo EN
-        def _translate_async():
-            translated = translate_text(text, source="EN", target="ES")
-            if translated:
-                self._emit("on_subtitle_translated", source, translated, segment_id)
-
-        threading.Thread(target=_translate_async, daemon=True).start()
-
-    # ---------- Flujo LOOPBACK (Compañeros): VAD + Whisper por segmento ----------
-    def _on_segment(self, audio_np, source_label):
-        text = transcribe_audio(audio_np)
-        if not text or len(text.strip()) < 3:
+            self.transcriber.start()
+        except Exception as exc:
+            self.running = False
+            self._emit(
+                "on_status",
+                f"Error cargando transcripción: {exc}",
+            )
             return
 
-        mode = get_language_mode()
-        if mode == "en":
-            segment_id = self._next_segment_id()
-            threading.Thread(
-                target=self._handle_subtitle, args=(source_label, text, segment_id), daemon=True
-            ).start()
+        started_sources: list[str] = []
 
-        if self._should_trigger_assistant(source_label) and get_assistant_enabled() and is_question(text):
-            threading.Thread(target=self._handle_question, args=(source_label, text), daemon=True).start()
-
-    # ---------- Flujo MIC (Tú): streaming en tiempo real (RealtimeSTT) ----------
-    def _on_mic_partial(self, source_label, text):
-        # El subtítulo parcial depende SOLO del idioma de reunión, sin importar el asistente
-        if get_language_mode() == "en":
-            self._emit("on_subtitle_partial", source_label, text)
-
-    def _on_mic_final(self, source_label, text):
-        if not text or len(text.strip()) < 3:
-            return
-
-        mode = get_language_mode()
-        if mode == "en":
-            segment_id = self._next_segment_id()
-            threading.Thread(
-                target=self._handle_subtitle, args=(source_label, text, segment_id), daemon=True
-            ).start()
-
-        if self._should_trigger_assistant(source_label) and get_assistant_enabled() and is_question(text):
-            threading.Thread(target=self._handle_question, args=(source_label, text), daemon=True).start()
-
-    def start(self):
-        if get_assistant_enabled():
-            self._emit("on_status", "Preparando asistente...")
-            warmup()
-
-        mic_language = get_language_mode()
-        self.mic_streamer = RealtimeMicStreamer(
-            "Tú", self.mic_device, self._on_mic_partial, self._on_mic_final, language=mic_language
-        )
-        self.mic_streamer.start()
-
-        def _on_loopback_error(e):
-            print(f"[Loopback] No se pudo iniciar captura de sistema: {e}")
-            self._emit("on_status", "Escuchando (solo tu voz, sin loopback)...")
-
-        self.loopback_streamer = LoopbackVADStreamer("Compañeros", self._on_segment, on_error=_on_loopback_error)
-        self.loopback_streamer.start()
-        self._emit("on_status", "Escuchando...")
-
-    def restart_mic_language(self, new_language):
-        """
-        Reinicia únicamente el streamer del micrófono con el nuevo idioma,
-        sin afectar el loopback de 'Compañeros'. Se usa cuando el usuario
-        cambia el modo de reunión (EN/ES) mientras la app sigue escuchando.
-        """
-        if not self.mic_streamer:
-            return
-
-        self._emit("on_status", "Actualizando idioma...")
         try:
-            self.mic_streamer.stop()
-        except Exception as e:
-            print(f"[Tú] Error al detener streamer previo: {e}")
+            self.mic_streamer = LocalMicStreamer(
+                self.mic_device,
+                self.transcriber,
+                self._next_segment_id,
+                self._local_speech_gate,
+                self._on_capture_error,
+                speech_end_ms=self.speech_end_ms,
+                max_utterance_seconds=self.max_utterance_seconds,
+                partials_enabled=self.partials_enabled,
+            )
+            self.mic_streamer.start()
+            started_sources.append("YOU")
+        except Exception as exc:
+            print(f"[Audio:YOU] {exc}")
+            self.mic_streamer = None
 
-        self.mic_streamer = RealtimeMicStreamer(
-            "Tú", self.mic_device, self._on_mic_partial, self._on_mic_final, language=new_language
-        )
-        self.mic_streamer.start()
-        self._emit("on_status", "Escuchando...")
+        try:
+            self.loopback_streamer = LocalSystemAudioStreamer(
+                self.transcriber,
+                self._next_segment_id,
+                self._local_speech_gate,
+                self._on_capture_error,
+                speech_end_ms=self.speech_end_ms,
+                max_utterance_seconds=self.max_utterance_seconds,
+                partials_enabled=self.partials_enabled,
+            )
+            self.loopback_streamer.start()
+            started_sources.append("MEETING")
+        except Exception as exc:
+            print(f"[Audio:MEETING] {exc}")
+            self.loopback_streamer = None
 
-    def stop(self):
+        if not started_sources:
+            self.running = False
+            if self.transcriber:
+                self.transcriber.stop()
+                self.transcriber = None
+            self._emit(
+                "on_status",
+                "Error: no se pudo abrir ninguna fuente de audio",
+            )
+            return
+
+        if started_sources == ["YOU"]:
+            status = "Escuchando (solo micrófono)"
+        elif started_sources == ["MEETING"]:
+            status = "Escuchando (solo audio de reunión)"
+        else:
+            status = f"Escuchando · {self.engine_label}"
+
+        self._emit("on_status", status)
+
+    def stop(self) -> None:
+        if not self.running and not self.transcriber:
+            return
+
+        self.running = False
+
         if self.mic_streamer:
             self.mic_streamer.stop()
+            self.mic_streamer = None
+
         if self.loopback_streamer:
             self.loopback_streamer.stop()
+            self.loopback_streamer = None
+
+        if self.transcriber:
+            self.transcriber.stop()
+            self.transcriber = None
+
         self._emit("on_status", "Detenido")
+
+    def _emit(self, name: str, *args) -> None:
+        callback = self.callbacks.get(name)
+        if callback:
+            callback(*args)

@@ -1,577 +1,1655 @@
-import os
+"""Desktop UI with two fully independent meeting modes.
 
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+Subtítulo:
+    English-only live captions for a ~6-person meeting using local
+    Faster-Whisper. No assistant logic is loaded or displayed.
 
-import faulthandler
+Asistente:
+    Independent technical-interview workspace for Stage 2. It uses Groq
+    Whisper for high-accuracy interview transcription and Groq for answers.
+"""
 
-faulthandler.enable()
+from __future__ import annotations
 
 import sys
 import threading
 import time
-from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
+
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QComboBox, QPushButton, QTextEdit, QFrame
+    QApplication,
+    QComboBox,
+    QDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QTabWidget,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt6.QtGui import QFont
 
-from config import (
-    set_language_mode, get_language_mode,
-    set_assistant_enabled, get_assistant_enabled,
-    set_assistant_listen_mode, get_assistant_listen_mode,
-    get_ai_provider_display_name,
-)
-from vad_detector import ListenerController
 
-SOURCE_COLORS = {
-    "Tú": "#4da6ff",
-    "Compañeros": "#ffa64d",
-}
+# Keep the visual identity of the previous app.
+APP_BG = "#0f1216"
+CARD_BG = "#151a20"
+CARD_BG_SOFT = "#181e25"
+BORDER = "#2a323c"
+TEXT = "#f0f2f5"
+MUTED = "#8f9baa"
+MUTED_DARK = "#687584"
+BLUE = "#4da6ff"
+GREEN = "#5cb85c"
+ORANGE = "#ffa64d"
+WARNING = "#f0ad4e"
+RED = "#d9534f"
 
-PILL_STYLE = """
-    QPushButton, QComboBox {
-        background-color: rgba(255,255,255,15);
-        color: white;
-        border-radius: 16px;
-        padding: 6px 14px;
-        border: 1px solid rgba(255,255,255,25);
-    }
-    QComboBox::drop-down { border: none; width: 18px; }
-    QPushButton:hover, QComboBox:hover { background-color: rgba(255,255,255,25); }
-    QComboBox QAbstractItemView {
-        background-color: #1e1e1e;
-        color: white;
-        selection-background-color: #3a3a5a;
-        selection-color: white;
-        border: 1px solid rgba(255,255,255,30);
-        outline: none;
-    }
-"""
 
-ASSISTANT_BTN_ON_STYLE = """
-    QPushButton {
-        background-color: rgba(90,110,255,60);
-        color: white;
-        border-radius: 16px;
-        padding: 6px 14px;
-        border: 1px solid #5a6eff;
-    }
-"""
+def _now() -> str:
+    return time.strftime("%I:%M:%S %p")
 
-CLOSE_BTN_STYLE = """
+
+def _button_style(primary: bool = False) -> str:
+    if primary:
+        return f"""
+        QPushButton {{
+            background-color: {BLUE};
+            color: white;
+            border-radius: 16px;
+            padding: 7px 16px;
+            border: none;
+            font-weight: 700;
+        }}
+        QPushButton:hover {{
+            background-color: #69b4ff;
+        }}
+        QPushButton:disabled {{
+            background-color: #26313c;
+            color: #6f7b88;
+        }}
+        """
+
+    return """
     QPushButton {
         background-color: rgba(255,255,255,15);
-        color: white;
-        border-radius: 18px;
+        color: #f0f2f5;
+        border-radius: 16px;
+        padding: 7px 14px;
         border: 1px solid rgba(255,255,255,25);
-        font-size: 14px;
-        font-weight: bold;
+        font-weight: 600;
     }
     QPushButton:hover {
-        background-color: rgba(255,80,80,50);
+        background-color: rgba(255,255,255,25);
     }
-"""
-
-START_BTN_STYLE = """
-    QPushButton {
-        background-color: rgba(255,255,255,15);
-        color: white;
-        border-radius: 16px;
-        padding: 6px 16px;
-        border: 1px solid rgba(255,255,255,25);
-        font-weight: bold;
+    QPushButton:disabled {
+        color: #6f7b88;
+        background-color: #1b2026;
+        border-color: #2b323a;
     }
-    QPushButton:hover { background-color: rgba(255,255,255,25); }
-"""
+    """
 
 
-def _now():
-    return time.strftime("%I:%M %p")
-
-
-class Bridge(QObject):
-    """Reenvía callbacks del hilo de audio hacia la UI (thread-safe con señales Qt)."""
+class SubtitleBridge(QObject):
     status_changed = pyqtSignal(str)
-    subtitle_ready = pyqtSignal(str, str, int)  # source, en_text, segment_id
-    subtitle_translated = pyqtSignal(str, str, int)  # source, es_text, segment_id
-    subtitle_partial = pyqtSignal(str, str)  # source, en_text (en construcción)
-    question_ready = pyqtSignal(str, str)
-    assistant_state_changed = pyqtSignal(str)
-    answer_ready = pyqtSignal(str)
-    answer_error = pyqtSignal(str)
+    subtitle_partial = pyqtSignal(str, str, int)
+    subtitle_ready = pyqtSignal(str, str, int)
 
 
-class OverlayWindow(QWidget):
+class AssistantBridge(QObject):
+    status_changed = pyqtSignal(str)
+    transcript_partial = pyqtSignal(str, str, int)
+    transcript_final = pyqtSignal(str, str, int)
+    transcript_rejected = pyqtSignal(str, str)
+    question_candidate = pyqtSignal(str)
+    turn_understood = pyqtSignal(str, str, str)
+    question_waiting = pyqtSignal(str)
+    question_detected = pyqtSignal(str)
+    question_ignored = pyqtSignal(str)
+    answer_started = pyqtSignal(str)
+    answer_delta = pyqtSignal(str)
+    answer_completed = pyqtSignal(str)
+    assistant_error = pyqtSignal(str)
+
+
+class CaptionCard(QFrame):
+    """A single live caption block updated by partial/final events."""
+
+    def __init__(self, source: str, timestamp: str):
+        super().__init__()
+        self.source = source
+        self.setObjectName("captionCard")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 12)
+        layout.setSpacing(6)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+
+        source_name = "YOU" if source == "YOU" else "MEETING"
+        source_color = BLUE if source == "YOU" else ORANGE
+
+        badge = QLabel(source_name)
+        badge.setStyleSheet(
+            f"background-color: {source_color}; color: white; "
+            "font-size: 9px; font-weight: 800; border-radius: 8px; "
+            "padding: 3px 8px;"
+        )
+
+        self.time_label = QLabel(timestamp)
+        self.time_label.setStyleSheet(
+            f"color: {MUTED_DARK}; font-size: 10px; background: transparent;"
+        )
+
+        self.state_label = QLabel("")
+        self.state_label.setStyleSheet(
+            f"color: {MUTED_DARK}; font-size: 9px; background: transparent;"
+        )
+
+        header.addWidget(badge)
+        header.addWidget(self.state_label)
+        header.addStretch()
+        header.addWidget(self.time_label)
+
+        self.text_label = QLabel("")
+        self.text_label.setWordWrap(True)
+        self.text_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.text_label.setStyleSheet(
+            f"color: {TEXT}; font-size: 15px; background: transparent;"
+        )
+
+        layout.addLayout(header)
+        layout.addWidget(self.text_label)
+
+        self.setStyleSheet(
+            """
+            QFrame#captionCard {
+                background-color: rgba(255,255,255,8);
+                border-radius: 12px;
+                border: 1px solid rgba(255,255,255,15);
+            }
+            """
+        )
+
+    def set_caption(self, text: str, partial: bool) -> None:
+        self.text_label.setText(text)
+        self.state_label.setText("live" if partial else "")
+        self.text_label.setStyleSheet(
+            f"color: {'#d7dde5' if partial else TEXT}; "
+            "font-size: 15px; background: transparent;"
+        )
+
+
+class SubtitleTab(QWidget):
+    """Stage 1: English live subtitles only."""
+
     def __init__(self):
         super().__init__()
-        self.bridge = Bridge()
+
+        self.bridge = SubtitleBridge()
         self.controller = None
-        self._drag_pos = None
-        self._last_subtitle_segment_id = {"Tú": 0, "Compañeros": 0}
-        self._is_listening = False
+        self._starting = False
+        self._stopping = False
 
-        self._setup_window()
-        self._setup_ui()
+        self._entries: dict[tuple[str, int], CaptionCard] = {}
+        self._entry_order: list[tuple[str, int]] = []
+        self._max_entries = 60
+
+        # History is private to the Subtitle tab/session.
+        self._history: list[dict] = []
+        self._history_index: dict[tuple[str, int], int] = {}
+
+        self._build_ui()
         self._connect_signals()
-        self._schedule_resize()
 
-    # ---------- Ventana overlay ----------
-    def _setup_window(self):
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 15, 20, 14)
+        root.setSpacing(11)
+
+        # Header inspired by the selected reference design, using old app colors.
+        header = QHBoxLayout()
+        header.setSpacing(8)
+
+        icon = QLabel("🎙")
+        icon.setStyleSheet(
+            "font-size: 16px; background: transparent;"
+        )
+
+        title = QLabel("Meeting Subtitles")
+        title.setStyleSheet(
+            f"color: {TEXT}; font-size: 15px; font-weight: 750; "
+            "background: transparent;"
+        )
+
+        self.status_dot = QLabel("●")
+        self.status_dot.setStyleSheet(
+            f"color: {MUTED_DARK}; font-size: 9px; background: transparent;"
+        )
+
+        self.status_label = QLabel("Ready")
+        self.status_label.setStyleSheet(
+            f"color: {MUTED}; font-size: 12px; background: transparent;"
+        )
+
+        language = QLabel("English")
+        language.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px; background: transparent;"
+        )
+
+        separator = QLabel("•")
+        separator.setStyleSheet(
+            f"color: {MUTED_DARK}; font-size: 10px; background: transparent;"
+        )
+
+        self.history_button = QPushButton("▣  Historial")
+        self.history_button.setCursor(
+            Qt.CursorShape.PointingHandCursor
+        )
+        self.history_button.clicked.connect(self._show_history)
+        self.history_button.setStyleSheet(_button_style())
+
+        self.start_button = QPushButton("▶  Iniciar")
+        self.start_button.setCursor(
+            Qt.CursorShape.PointingHandCursor
+        )
+        self.start_button.clicked.connect(self._toggle_session)
+        self.start_button.setStyleSheet(_button_style(primary=True))
+
+        header.addWidget(icon)
+        header.addWidget(title)
+        header.addSpacing(4)
+        header.addWidget(self.status_dot)
+        header.addWidget(self.status_label)
+        header.addStretch()
+        header.addWidget(language)
+        header.addSpacing(6)
+        header.addWidget(self.history_button)
+        header.addWidget(self.start_button)
+
+        root.addLayout(header)
+
+        divider = QFrame()
+        divider.setFixedHeight(1)
+        divider.setStyleSheet(
+            "background-color: rgba(255,255,255,18);"
+        )
+        root.addWidget(divider)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.scroll_area.setStyleSheet(
+            """
+            QScrollArea {
+                background: transparent;
+                border: none;
+            }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 7px;
+                margin: 4px 0 4px 0;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(255,255,255,45);
+                border-radius: 3px;
+                min-height: 25px;
+            }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            """
+        )
+
+        self.caption_host = QWidget()
+        self.caption_host.setStyleSheet("background: transparent;")
+
+        self.caption_layout = QVBoxLayout(self.caption_host)
+        self.caption_layout.setContentsMargins(2, 2, 2, 2)
+        self.caption_layout.setSpacing(8)
+
+        self.empty_label = QLabel(
+            "Inicia la reunión para ver los subtítulos en inglés aquí."
+        )
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_label.setStyleSheet(
+            f"color: #718092; font-size: 13px; "
+            "background: transparent; padding: 70px;"
+        )
+
+        self.caption_layout.addWidget(self.empty_label)
+        self.caption_layout.addStretch()
+
+        self.scroll_area.setWidget(self.caption_host)
+        root.addWidget(self.scroll_area, 1)
+
+        footer = QHBoxLayout()
+        footer.setSpacing(14)
+
+        self.mic_status = QLabel("🎤 Microphone: Ready")
+        self.system_status = QLabel("🔊 System audio: Ready")
+        self.engine_status = QLabel("⚡ Faster-Whisper: Local")
+
+        for label in (
+            self.mic_status,
+            self.system_status,
+            self.engine_status,
+        ):
+            label.setStyleSheet(
+                f"color: {MUTED}; font-size: 10px; background: transparent;"
+            )
+
+        footer.addWidget(self.mic_status)
+        footer.addWidget(self.system_status)
+        footer.addStretch()
+        footer.addWidget(self.engine_status)
+
+        root.addLayout(footer)
+
+    def _connect_signals(self) -> None:
+        self.bridge.status_changed.connect(self._on_status_changed)
+        self.bridge.subtitle_partial.connect(self._on_subtitle_partial)
+        self.bridge.subtitle_ready.connect(self._on_subtitle_ready)
+
+    def _toggle_session(self) -> None:
+        if self._starting or self._stopping:
+            return
+
+        if self.controller is None:
+            self._start_session()
+        else:
+            self._stop_session()
+
+    def _start_session(self) -> None:
+        self._starting = True
+        self._clear_captions()
+        self._clear_history()
+
+        self.start_button.setEnabled(False)
+        self.start_button.setText("⏳ Cargando...")
+        self._on_status_changed("Cargando modelo local...")
+
+        callbacks = {
+            "on_status": lambda text: self.bridge.status_changed.emit(text),
+            "on_subtitle_partial": (
+                lambda source, text, segment_id:
+                self.bridge.subtitle_partial.emit(source, text, segment_id)
+            ),
+            "on_subtitle": (
+                lambda source, text, segment_id:
+                self.bridge.subtitle_ready.emit(source, text, segment_id)
+            ),
+        }
+
+        from vad_detector import ListenerController
+
+        self.controller = ListenerController(callbacks)
+
+        threading.Thread(
+            target=self.controller.start,
+            name="subtitle-controller",
+            daemon=True,
+        ).start()
+
+    def _stop_session(self) -> None:
+        controller = self.controller
+        if controller is None:
+            return
+
+        self._stopping = True
+        self.start_button.setEnabled(False)
+        self.start_button.setText("⏳ Deteniendo...")
+
+        def stop_worker() -> None:
+            try:
+                controller.stop()
+            except Exception as exc:
+                self.bridge.status_changed.emit(
+                    f"Error stopping subtitles: {exc}"
+                )
+
+        threading.Thread(
+            target=stop_worker,
+            name="subtitle-stop",
+            daemon=True,
+        ).start()
+
+    def _clear_captions(self) -> None:
+        for card in self._entries.values():
+            card.deleteLater()
+
+        self._entries.clear()
+        self._entry_order.clear()
+        self.empty_label.show()
+
+    def _clear_history(self) -> None:
+        self._history.clear()
+        self._history_index.clear()
+
+    def _ensure_entry(
+        self,
+        source: str,
+        segment_id: int,
+    ) -> CaptionCard:
+        key = (source, segment_id)
+
+        existing = self._entries.get(key)
+        if existing is not None:
+            return existing
+
+        self.empty_label.hide()
+
+        card = CaptionCard(source, _now())
+        insert_at = max(0, self.caption_layout.count() - 1)
+        self.caption_layout.insertWidget(insert_at, card)
+
+        self._entries[key] = card
+        self._entry_order.append(key)
+
+        while len(self._entry_order) > self._max_entries:
+            old_key = self._entry_order.pop(0)
+            old_card = self._entries.pop(old_key, None)
+            if old_card is not None:
+                old_card.deleteLater()
+
+        return card
+
+    def _on_subtitle_partial(
+        self,
+        source: str,
+        text: str,
+        segment_id: int,
+    ) -> None:
+        card = self._ensure_entry(source, segment_id)
+        card.set_caption(text, partial=True)
+        self._scroll_to_bottom()
+
+    def _on_subtitle_ready(
+        self,
+        source: str,
+        text: str,
+        segment_id: int,
+    ) -> None:
+        key = (source, segment_id)
+
+        card = self._ensure_entry(source, segment_id)
+        card.set_caption(text, partial=False)
+
+        history_item = {
+            "key": key,
+            "source": source,
+            "time": _now(),
+            "english": text,
+        }
+
+        existing_index = self._history_index.get(key)
+        if existing_index is None:
+            self._history_index[key] = len(self._history)
+            self._history.append(history_item)
+        else:
+            self._history[existing_index] = history_item
+
+        self._scroll_to_bottom()
+
+    def _scroll_to_bottom(self) -> None:
+        QTimer.singleShot(
+            0,
+            lambda: self.scroll_area.verticalScrollBar().setValue(
+                self.scroll_area.verticalScrollBar().maximum()
+            ),
+        )
+
+    def _history_plain_text(self) -> str:
+        if not self._history:
+            return ""
+
+        blocks = []
+        for item in self._history:
+            source = "YOU" if item["source"] == "YOU" else "MEETING"
+            blocks.append(
+                f"[{item['time']}] {source}\n{item['english']}"
+            )
+
+        return "\n\n".join(blocks)
+
+    def _show_history(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Historial de la conversación")
+        dialog.setMinimumSize(720, 520)
+        dialog.setModal(True)
+        dialog.setStyleSheet(
+            f"""
+            QDialog {{
+                background-color: {APP_BG};
+            }}
+            QLabel {{
+                background: transparent;
+            }}
+            """
+        )
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
+        header = QHBoxLayout()
+
+        title = QLabel(
+            f"Historial de la conversación · "
+            f"{len(self._history)} intervenciones"
+        )
+        title.setStyleSheet(
+            f"color: {TEXT}; font-size: 15px; font-weight: 750;"
+        )
+
+        header.addWidget(title)
+        header.addStretch()
+        layout.addLayout(header)
+
+        history_view = QTextBrowser()
+        history_view.setOpenExternalLinks(False)
+        history_view.setStyleSheet(
+            f"""
+            QTextBrowser {{
+                background-color: {CARD_BG};
+                color: #e7ebef;
+                border: 1px solid {BORDER};
+                border-radius: 10px;
+                padding: 12px;
+                font-size: 13px;
+            }}
+            """
+        )
+
+        history_text = self._history_plain_text()
+        if history_text:
+            history_view.setPlainText(history_text)
+        else:
+            history_view.setPlainText(
+                "Todavía no hay intervenciones en el historial."
+            )
+
+        layout.addWidget(history_view, 1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+
+        copy_button = QPushButton("📋 Copiar todo")
+        copy_button.setStyleSheet(_button_style())
+        copy_button.setEnabled(bool(history_text))
+
+        def copy_history() -> None:
+            QApplication.clipboard().setText(history_text)
+            copy_button.setText("✓ Copiado")
+            QTimer.singleShot(
+                1200,
+                lambda: copy_button.setText("📋 Copiar todo"),
+            )
+
+        copy_button.clicked.connect(copy_history)
+        buttons.addWidget(copy_button)
+
+        close_button = QPushButton("Cerrar")
+        close_button.setStyleSheet(_button_style())
+        close_button.clicked.connect(dialog.accept)
+        buttons.addWidget(close_button)
+
+        layout.addLayout(buttons)
+        dialog.exec()
+
+    def _on_status_changed(self, text: str) -> None:
+        loading = text.startswith("Cargando")
+        listening = text.startswith("Escuchando")
+        stopped = text == "Detenido"
+        error = text.startswith("Error")
+
+        if loading:
+            self._starting = True
+            self.status_dot.setStyleSheet(
+                f"color: {WARNING}; font-size: 9px; background: transparent;"
+            )
+            self.status_label.setText("Loading")
+            return
+
+        if listening:
+            self._starting = False
+            self._stopping = False
+
+            self.status_dot.setStyleSheet(
+                f"color: {GREEN}; font-size: 9px; background: transparent;"
+            )
+            self.status_label.setText("Listening")
+            self.start_button.setText("■  Detener")
+            self.start_button.setEnabled(True)
+
+            mic_connected = "solo audio de reunión" not in text
+            system_connected = "solo micrófono" not in text
+
+            self.mic_status.setText(
+                "🎤 Microphone: Connected"
+                if mic_connected
+                else "🎤 Microphone: Unavailable"
+            )
+            self.system_status.setText(
+                "🔊 System audio: Connected"
+                if system_connected
+                else "🔊 System audio: Unavailable"
+            )
+            return
+
+        if stopped:
+            self.controller = None
+            self._starting = False
+            self._stopping = False
+
+            self.status_dot.setStyleSheet(
+                f"color: {MUTED_DARK}; font-size: 9px; background: transparent;"
+            )
+            self.status_label.setText("Ready")
+            self.start_button.setText("▶  Iniciar")
+            self.start_button.setEnabled(True)
+            self.mic_status.setText("🎤 Microphone: Ready")
+            self.system_status.setText("🔊 System audio: Ready")
+            return
+
+        if error:
+            self.controller = None
+            self._starting = False
+            self._stopping = False
+
+            self.status_dot.setStyleSheet(
+                f"color: {RED}; font-size: 9px; background: transparent;"
+            )
+            self.status_label.setText("Error")
+            self.start_button.setText("▶  Iniciar")
+            self.start_button.setEnabled(True)
+            self.engine_status.setText(
+                "⚠ Faster-Whisper: check console"
+            )
+            return
+
+        self.status_label.setText(text)
+
+    def shutdown(self) -> None:
+        controller = self.controller
+        self.controller = None
+
+        if controller is not None:
+            try:
+                controller.stop()
+            except Exception:
+                pass
+
+
+class AssistantTab(QWidget):
+    """Stage 2: independent technical interview copilot."""
+
+    def __init__(self):
+        super().__init__()
+
+        self.bridge = AssistantBridge()
+        self.controller = None
+        self._starting = False
+        self._stopping = False
+
+        self._transcript_entries: dict[tuple[str, int], dict] = {}
+        self._transcript_order: list[tuple[str, int]] = []
+        self._max_transcript_entries = 30
+        self._answer_buffer = ""
+        self._understood_question_text = ""
+        self._has_any_turn = False
+        self._has_interviewer_turn = False
+
+        self._build_ui()
+        self._connect_signals()
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 15, 20, 16)
+        root.setSpacing(10)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+
+        icon = QLabel("✦")
+        icon.setStyleSheet(
+            f"color: {BLUE}; font-size: 16px; background: transparent;"
+        )
+
+        title = QLabel("Technical Interview Assistant")
+        title.setStyleSheet(
+            f"color: {TEXT}; font-size: 15px; font-weight: 750; "
+            "background: transparent;"
+        )
+
+        self.status_dot = QLabel("●")
+        self.status_dot.setStyleSheet(
+            f"color: {MUTED_DARK}; font-size: 9px; background: transparent;"
+        )
+
+        self.status_label = QLabel("Ready")
+        self.status_label.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px; background: transparent;"
+        )
+
+        input_label = QLabel("Input: Auto")
+        input_label.setToolTip(
+            "Stage 2 detects English or Spanish independently for each turn."
+        )
+        input_label.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px; background: transparent;"
+        )
+
+        response_scope_label = QLabel("Responder a:")
+        response_scope_label.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px; background: transparent;"
+        )
+
+        self.response_scope_combo = QComboBox()
+        self.response_scope_combo.addItem(
+            "Entrevistador",
+            "interviewer",
+        )
+        self.response_scope_combo.addItem("Ambos", "both")
+        self.response_scope_combo.setMinimumWidth(118)
+        self.response_scope_combo.setToolTip(
+            "Entrevistador: solo las preguntas del entrevistador generan "
+            "respuestas. Ambos: YOU e INTERVIEWER pueden generarlas."
+        )
+        self.response_scope_combo.setStyleSheet(
+            f"""
+            QComboBox {{
+                background-color: rgba(255,255,255,15);
+                color: {TEXT};
+                border: 1px solid rgba(255,255,255,25);
+                border-radius: 8px;
+                padding: 5px 9px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {CARD_BG_SOFT};
+                color: {TEXT};
+                selection-background-color: {BLUE};
+            }}
+            """
+        )
+        self.response_scope_combo.currentIndexChanged.connect(
+            self._on_response_scope_changed
+        )
+
+        language_label = QLabel("Answer:")
+        language_label.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px; background: transparent;"
+        )
+
+        self.language_combo = QComboBox()
+        self.language_combo.addItem("English", "en")
+        self.language_combo.addItem("Español", "es")
+        self.language_combo.setMinimumWidth(105)
+        self.language_combo.setStyleSheet(
+            f"""
+            QComboBox {{
+                background-color: rgba(255,255,255,15);
+                color: {TEXT};
+                border: 1px solid rgba(255,255,255,25);
+                border-radius: 8px;
+                padding: 5px 9px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {CARD_BG_SOFT};
+                color: {TEXT};
+                selection-background-color: {BLUE};
+            }}
+            """
+        )
+        self.language_combo.currentIndexChanged.connect(
+            self._on_language_changed
+        )
+
+        self.interview_button = QPushButton("▶  Iniciar entrevista")
+        self.interview_button.setCursor(
+            Qt.CursorShape.PointingHandCursor
+        )
+        self.interview_button.setStyleSheet(_button_style(primary=True))
+        self.interview_button.clicked.connect(self._toggle_session)
+
+        header.addWidget(icon)
+        header.addWidget(title)
+        header.addSpacing(4)
+        header.addWidget(self.status_dot)
+        header.addWidget(self.status_label)
+        header.addStretch()
+        header.addWidget(input_label)
+        header.addSpacing(6)
+        header.addWidget(response_scope_label)
+        header.addWidget(self.response_scope_combo)
+        header.addSpacing(6)
+        header.addWidget(language_label)
+        header.addWidget(self.language_combo)
+        header.addSpacing(6)
+        header.addWidget(self.interview_button)
+
+        root.addLayout(header)
+
+        divider = QFrame()
+        divider.setFixedHeight(1)
+        divider.setStyleSheet(
+            "background-color: rgba(255,255,255,18);"
+        )
+        root.addWidget(divider)
+
+        conversation_header = QHBoxLayout()
+
+        conversation_title = QLabel("Conversation")
+        conversation_title.setStyleSheet(
+            f"color: {TEXT}; font-size: 12px; font-weight: 700; "
+            "background: transparent;"
+        )
+
+        self.activity_label = QLabel(
+            "Waiting for interview audio"
+        )
+        self.activity_label.setStyleSheet(
+            f"color: {MUTED}; font-size: 10px; background: transparent;"
+        )
+
+        conversation_header.addWidget(conversation_title)
+        conversation_header.addStretch()
+        conversation_header.addWidget(self.activity_label)
+
+        root.addLayout(conversation_header)
+
+        self.transcript_view = QTextBrowser()
+        self.transcript_view.setOpenExternalLinks(False)
+        self.transcript_view.setMinimumHeight(155)
+        self.transcript_view.setStyleSheet(
+            f"""
+            QTextBrowser {{
+                background-color: rgba(255,255,255,8);
+                color: {TEXT};
+                border: 1px solid rgba(255,255,255,15);
+                border-radius: 12px;
+                padding: 10px;
+                font-size: 12px;
+            }}
+            """
+        )
+        self.transcript_view.setPlainText(
+            "Start the interview to see YOU and INTERVIEWER here."
+        )
+        root.addWidget(self.transcript_view, 1)
+
+        answer_header = QHBoxLayout()
+
+        answer_title = QLabel("Suggested answer")
+        answer_title.setStyleSheet(
+            f"color: {TEXT}; font-size: 12px; font-weight: 700; "
+            "background: transparent;"
+        )
+
+        self.answer_state = QLabel("Groq · GPT-OSS 120B")
+        self.answer_state.setStyleSheet(
+            f"color: {MUTED}; font-size: 10px; background: transparent;"
+        )
+
+        answer_header.addWidget(answer_title)
+        answer_header.addStretch()
+        answer_header.addWidget(self.answer_state)
+        root.addLayout(answer_header)
+
+        self.understood_question = QLabel(
+            "Understood question: —"
+        )
+        self.understood_question.setWordWrap(True)
+        self.understood_question.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.understood_question.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px; "
+            "background: transparent; padding: 0 2px 2px 2px;"
+        )
+        root.addWidget(self.understood_question)
+
+        self.answer_view = QTextBrowser()
+        self.answer_view.setOpenExternalLinks(False)
+        self.answer_view.setMinimumHeight(135)
+        self.answer_view.setStyleSheet(
+            f"""
+            QTextBrowser {{
+                background-color: {CARD_BG_SOFT};
+                color: {TEXT};
+                border: 1px solid rgba(77,166,255,45);
+                border-radius: 12px;
+                padding: 12px;
+                font-size: 14px;
+            }}
+            """
+        )
+        self.answer_view.setPlainText(
+            "A technical answer will appear here when a question is detected."
+        )
+        root.addWidget(self.answer_view)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+
+        self.answer_last_button = QPushButton("Responder último")
+        self.answer_last_button.setStyleSheet(_button_style())
+        self.answer_last_button.setEnabled(False)
+        self.answer_last_button.clicked.connect(self._answer_last)
+
+        self.regenerate_button = QPushButton("Regenerar")
+        self.regenerate_button.setStyleSheet(_button_style())
+        self.regenerate_button.setEnabled(False)
+        self.regenerate_button.clicked.connect(self._regenerate)
+
+        self.copy_question_button = QPushButton("📋 Copiar pregunta")
+        self.copy_question_button.setStyleSheet(_button_style())
+        self.copy_question_button.setEnabled(False)
+        self.copy_question_button.clicked.connect(
+            self._copy_question
+        )
+
+        self.copy_answer_button = QPushButton("📋 Copiar respuesta")
+        self.copy_answer_button.setStyleSheet(_button_style())
+        self.copy_answer_button.setEnabled(False)
+        self.copy_answer_button.clicked.connect(self._copy_answer)
+
+        actions.addWidget(self.answer_last_button)
+        actions.addWidget(self.regenerate_button)
+        actions.addWidget(self.copy_question_button)
+        actions.addWidget(self.copy_answer_button)
+        actions.addStretch()
+
+        engine = QLabel("🎤 Groq Whisper Large V3   ⚡ Groq GPT-OSS 120B")
+        engine.setStyleSheet(
+            f"color: {MUTED}; font-size: 10px; background: transparent;"
+        )
+        actions.addWidget(engine)
+
+        root.addLayout(actions)
+
+    def _connect_signals(self) -> None:
+        self.bridge.status_changed.connect(self._on_status_changed)
+        self.bridge.transcript_partial.connect(
+            self._on_transcript_partial
+        )
+        self.bridge.transcript_final.connect(
+            self._on_transcript_final
+        )
+        self.bridge.transcript_rejected.connect(
+            self._on_transcript_rejected
+        )
+        self.bridge.question_candidate.connect(
+            self._on_question_candidate
+        )
+        self.bridge.turn_understood.connect(
+            self._on_turn_understood
+        )
+        self.bridge.question_waiting.connect(
+            self._on_question_waiting
+        )
+        self.bridge.question_detected.connect(
+            self._on_question_detected
+        )
+        self.bridge.question_ignored.connect(
+            self._on_question_ignored
+        )
+        self.bridge.answer_started.connect(
+            self._on_answer_started
+        )
+        self.bridge.answer_delta.connect(self._on_answer_delta)
+        self.bridge.answer_completed.connect(
+            self._on_answer_completed
+        )
+        self.bridge.assistant_error.connect(
+            self._on_assistant_error
+        )
+
+    def _toggle_session(self) -> None:
+        if self._starting or self._stopping:
+            return
+
+        if self.controller is None:
+            self._start_session()
+        else:
+            self._stop_session()
+
+    def _start_session(self) -> None:
+        self._starting = True
+        self._clear_session_ui()
+
+        self.interview_button.setEnabled(False)
+        self.interview_button.setText("⏳ Cargando...")
+        self._on_status_changed("Preparando audio...")
+
+        callbacks = {
+            "on_status": (
+                lambda text: self.bridge.status_changed.emit(text)
+            ),
+            "on_transcript_partial": (
+                lambda speaker, text, segment_id:
+                self.bridge.transcript_partial.emit(
+                    speaker,
+                    text,
+                    segment_id,
+                )
+            ),
+            "on_transcript_final": (
+                lambda speaker, text, segment_id:
+                self.bridge.transcript_final.emit(
+                    speaker,
+                    text,
+                    segment_id,
+                )
+            ),
+            "on_transcript_rejected": (
+                lambda speaker, text:
+                self.bridge.transcript_rejected.emit(
+                    speaker,
+                    text,
+                )
+            ),
+            "on_question_candidate": (
+                lambda text:
+                self.bridge.question_candidate.emit(text)
+            ),
+            "on_turn_understood": (
+                lambda question, topic, language:
+                self.bridge.turn_understood.emit(
+                    question,
+                    topic,
+                    language,
+                )
+            ),
+            "on_question_waiting": (
+                lambda text:
+                self.bridge.question_waiting.emit(text)
+            ),
+            "on_question_detected": (
+                lambda text:
+                self.bridge.question_detected.emit(text)
+            ),
+            "on_question_ignored": (
+                lambda text:
+                self.bridge.question_ignored.emit(text)
+            ),
+            "on_answer_started": (
+                lambda text:
+                self.bridge.answer_started.emit(text)
+            ),
+            "on_answer_delta": (
+                lambda text:
+                self.bridge.answer_delta.emit(text)
+            ),
+            "on_answer_completed": (
+                lambda text:
+                self.bridge.answer_completed.emit(text)
+            ),
+            "on_assistant_error": (
+                lambda text:
+                self.bridge.assistant_error.emit(text)
+            ),
+        }
+
+        from interview_controller import InterviewController
+
+        language = self.language_combo.currentData() or "en"
+        response_scope = (
+            self.response_scope_combo.currentData()
+            or "interviewer"
+        )
+        self.controller = InterviewController(
+            callbacks=callbacks,
+            language=language,
+            response_scope=response_scope,
+        )
+
+        threading.Thread(
+            target=self.controller.start,
+            name="interview-controller",
+            daemon=True,
+        ).start()
+
+    def _stop_session(self) -> None:
+        controller = self.controller
+        if controller is None:
+            return
+
+        self._stopping = True
+        self.interview_button.setEnabled(False)
+        self.interview_button.setText("⏳ Deteniendo...")
+
+        def stop_worker() -> None:
+            try:
+                controller.stop()
+            except Exception as exc:
+                self.bridge.assistant_error.emit(str(exc))
+                self.bridge.status_changed.emit("Detenido")
+
+        threading.Thread(
+            target=stop_worker,
+            name="interview-stop",
+            daemon=True,
+        ).start()
+
+    def _clear_session_ui(self) -> None:
+        self._transcript_entries.clear()
+        self._transcript_order.clear()
+        self._answer_buffer = ""
+        self._understood_question_text = ""
+        self._has_any_turn = False
+        self._has_interviewer_turn = False
+
+        self.transcript_view.setPlainText(
+            "Listening for YOU and INTERVIEWER..."
+        )
+        self.answer_view.setPlainText(
+            "Waiting for a technical question..."
+        )
+        self.activity_label.setText("Waiting for interview audio")
+        self.answer_state.setText("Groq · GPT-OSS 120B")
+        self.understood_question.setText("Understood question: —")
+        self.answer_last_button.setEnabled(False)
+        self.regenerate_button.setEnabled(False)
+        self.copy_question_button.setEnabled(False)
+        self.copy_answer_button.setEnabled(False)
+
+    def _on_language_changed(self, _index: int = -1) -> None:
+        controller = self.controller
+        if controller is None:
+            return
+
+        language = self.language_combo.currentData() or "en"
+        controller.set_language(language)
+
+    def _on_response_scope_changed(self, _index: int = -1) -> None:
+        scope = (
+            self.response_scope_combo.currentData()
+            or "interviewer"
+        )
+
+        if self.controller is not None:
+            self.controller.set_response_scope(scope)
+
+        if self.status_label.text() == "Listening":
+            self.activity_label.setText(
+                "Listening for both speakers"
+                if scope == "both"
+                else "Listening for interviewer"
+            )
+
+        self._refresh_answer_last_button()
+
+    def _refresh_answer_last_button(self) -> None:
+        scope = (
+            self.response_scope_combo.currentData()
+            or "interviewer"
+        )
+        if scope == "both":
+            enabled = self._has_any_turn
+        else:
+            enabled = self._has_interviewer_turn
+
+        self.answer_last_button.setEnabled(enabled)
+
+    def _update_transcript(
+        self,
+        speaker: str,
+        text: str,
+        segment_id: int,
+        partial: bool,
+    ) -> None:
+        key = (speaker, segment_id)
+
+        if key not in self._transcript_entries:
+            self._transcript_order.append(key)
+
+        self._transcript_entries[key] = {
+            "speaker": speaker,
+            "text": text,
+            "partial": partial,
+        }
+
+        while len(self._transcript_order) > self._max_transcript_entries:
+            old_key = self._transcript_order.pop(0)
+            self._transcript_entries.pop(old_key, None)
+
+        blocks = []
+        for entry_key in self._transcript_order:
+            entry = self._transcript_entries.get(entry_key)
+            if entry is None:
+                continue
+
+            state = " · live" if entry["partial"] else ""
+            blocks.append(
+                f'{entry["speaker"]}{state}\n{entry["text"]}'
+            )
+
+        self.transcript_view.setPlainText("\n\n".join(blocks))
+        scrollbar = self.transcript_view.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def _on_transcript_partial(
+        self,
+        speaker: str,
+        text: str,
+        segment_id: int,
+    ) -> None:
+        self._update_transcript(
+            speaker,
+            text,
+            segment_id,
+            partial=True,
+        )
+
+    def _on_transcript_final(
+        self,
+        speaker: str,
+        text: str,
+        segment_id: int,
+    ) -> None:
+        self._update_transcript(
+            speaker,
+            text,
+            segment_id,
+            partial=False,
+        )
+
+        self._has_any_turn = True
+        if speaker == "INTERVIEWER":
+            self._has_interviewer_turn = True
+
+        self._refresh_answer_last_button()
+
+    def _on_transcript_rejected(
+        self,
+        speaker: str,
+        text: str,
+    ) -> None:
+        self.activity_label.setText(
+            "Noisy speech ignored"
+        )
+
+    def _on_question_candidate(self, text: str) -> None:
+        # A new interviewer turn is being analyzed. Clear the previous
+        # suggestion immediately so an answer to the old question is never
+        # mistaken for the current one.
+        self._answer_buffer = ""
+        self._understood_question_text = ""
+        self.answer_view.setPlainText("Analyzing question...")
+        self.answer_state.setText("Analyzing...")
+        self.understood_question.setText(
+            "Understood question: analyzing..."
+        )
+        self.regenerate_button.setEnabled(False)
+        self.copy_question_button.setEnabled(False)
+        self.copy_answer_button.setEnabled(False)
+        self.activity_label.setText(
+            "Analyzing question..."
+        )
+
+    def _on_turn_understood(
+        self,
+        question: str,
+        topic: str,
+        language: str,
+    ) -> None:
+        details = []
+        if topic:
+            details.append(topic)
+        if language and language != "unknown":
+            details.append(language.upper())
+
+        suffix = f"  ·  {' · '.join(details)}" if details else ""
+        self._understood_question_text = question.strip()
+        self.understood_question.setText(
+            f"Understood question: {question}{suffix}"
+        )
+        self.copy_question_button.setEnabled(
+            bool(self._understood_question_text)
+        )
+
+    def _on_question_waiting(self, text: str) -> None:
+        self._answer_buffer = ""
+        self.answer_view.setPlainText(
+            "Waiting for the speaker to finish the question..."
+        )
+        self.answer_state.setText("Waiting")
+        self.regenerate_button.setEnabled(False)
+        self.copy_answer_button.setEnabled(False)
+        self.activity_label.setText(
+            "Waiting for the question to finish..."
+        )
+
+    def _on_question_detected(self, text: str) -> None:
+        self.activity_label.setText(
+            "Technical question detected"
+        )
+
+    def _on_question_ignored(self, text: str) -> None:
+        self._answer_buffer = ""
+        self.answer_view.setPlainText(
+            "No technical answer needed. Waiting for the next question..."
+        )
+        self.answer_state.setText("Waiting")
+        self.regenerate_button.setEnabled(False)
+        self.copy_answer_button.setEnabled(False)
+        self.activity_label.setText(
+            "Non-technical turn ignored"
+        )
+
+    def _on_answer_started(self, question: str) -> None:
+        self._answer_buffer = ""
+        self.answer_view.clear()
+        self.answer_state.setText("Generating...")
+        self.regenerate_button.setEnabled(False)
+        self.copy_answer_button.setEnabled(False)
+
+    def _on_answer_delta(self, delta: str) -> None:
+        self._answer_buffer += delta
+        self.answer_view.setPlainText(self._answer_buffer)
+
+    def _on_answer_completed(self, answer: str) -> None:
+        if answer:
+            self._answer_buffer = answer
+            self.answer_view.setPlainText(answer)
+            self.answer_state.setText("Ready")
+            self.regenerate_button.setEnabled(True)
+            self.copy_answer_button.setEnabled(True)
+            self.activity_label.setText("Answer ready")
+        else:
+            self.answer_state.setText("No answer")
+
+    def _on_assistant_error(self, text: str) -> None:
+        self.answer_state.setText("Error")
+        self.answer_view.setPlainText(f"Error: {text}")
+        self.activity_label.setText("Check configuration / console")
+
+    def _answer_last(self) -> None:
+        if self.controller is not None:
+            self.controller.answer_last_interviewer_turn()
+
+    def _regenerate(self) -> None:
+        if self.controller is not None:
+            self.controller.regenerate()
+
+    def _copy_question(self) -> None:
+        if not self._understood_question_text:
+            return
+
+        QApplication.clipboard().setText(
+            self._understood_question_text
+        )
+        self.copy_question_button.setText("✓ Pregunta copiada")
+        QTimer.singleShot(
+            1200,
+            lambda: self.copy_question_button.setText(
+                "📋 Copiar pregunta"
+            ),
+        )
+
+    def _copy_answer(self) -> None:
+        if not self._answer_buffer:
+            return
+
+        QApplication.clipboard().setText(self._answer_buffer)
+        self.copy_answer_button.setText("✓ Respuesta copiada")
+        QTimer.singleShot(
+            1200,
+            lambda: self.copy_answer_button.setText(
+                "📋 Copiar respuesta"
+            ),
+        )
+
+    def _on_status_changed(self, text: str) -> None:
+        loading = text.startswith("Cargando")
+        listening = text.startswith("Escuchando")
+        stopped = text == "Detenido"
+        error = text.startswith("Error")
+
+        if loading:
+            self._starting = True
+            self.status_dot.setStyleSheet(
+                f"color: {WARNING}; font-size: 9px; background: transparent;"
+            )
+            self.status_label.setText("Loading")
+            return
+
+        if listening:
+            self._starting = False
+            self._stopping = False
+            self.status_dot.setStyleSheet(
+                f"color: {GREEN}; font-size: 9px; background: transparent;"
+            )
+            self.status_label.setText("Listening")
+            self.interview_button.setText("■  Detener")
+            self.interview_button.setEnabled(True)
+            scope = (
+                self.response_scope_combo.currentData()
+                or "interviewer"
+            )
+            self.activity_label.setText(
+                "Listening for both speakers"
+                if scope == "both"
+                else "Listening for interviewer"
+            )
+            return
+
+        if stopped:
+            self.controller = None
+            self._starting = False
+            self._stopping = False
+            self.status_dot.setStyleSheet(
+                f"color: {MUTED_DARK}; font-size: 9px; background: transparent;"
+            )
+            self.status_label.setText("Ready")
+            self.interview_button.setText("▶  Iniciar entrevista")
+            self.interview_button.setEnabled(True)
+            self.activity_label.setText("Stopped")
+            return
+
+        if error:
+            self.controller = None
+            self._starting = False
+            self._stopping = False
+            self.status_dot.setStyleSheet(
+                f"color: {RED}; font-size: 9px; background: transparent;"
+            )
+            self.status_label.setText("Error")
+            self.interview_button.setText("▶  Iniciar entrevista")
+            self.interview_button.setEnabled(True)
+            self.answer_view.setPlainText(text)
+            return
+
+        self.status_label.setText(text)
+
+    def shutdown(self) -> None:
+        controller = self.controller
+        self.controller = None
+
+        if controller is not None:
+            try:
+                controller.stop()
+            except Exception:
+                pass
+
+
+class MainWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+
+        self._drag_pos = None
+        self._build_window()
+        self._build_ui()
+
+    def _build_window(self) -> None:
+        self.setWindowTitle("Meeting Assistant")
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setMinimumWidth(720)
-        self.setMinimumHeight(390)
+        self.setAttribute(
+            Qt.WidgetAttribute.WA_TranslucentBackground
+        )
+        self.setMinimumSize(760, 500)
+        self.resize(900, 560)
         self.move(60, 60)
 
-    def _schedule_resize(self):
-        QTimer.singleShot(0, self.adjustSize)
-
-    def _setup_ui(self):
-        self.container = QFrame(self)
-        self.container.setObjectName("mainCard")
-        self.container.setStyleSheet("""
+    def _build_ui(self) -> None:
+        shell = QFrame()
+        shell.setObjectName("mainCard")
+        shell.setStyleSheet(
+            """
             QFrame#mainCard {
-                background-color: rgba(15, 18, 22, 240);
+                background-color: rgba(15, 18, 22, 242);
                 border-radius: 16px;
                 border: 1px solid rgba(255,255,255,20);
             }
-            QLabel { color: white; }
-        """)
+            QLabel {
+                background: transparent;
+            }
+            """
+        )
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(self.container)
+        outer.addWidget(shell)
 
-        layout = QVBoxLayout(self.container)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(14)
+        shell_layout = QVBoxLayout(shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
 
-        # --- Fila 1: Título (proveedor + estado unificado, tamaño compacto) ---
+        # Window/title row.
         title_bar = QHBoxLayout()
-        title_bar.setSpacing(6)
+        title_bar.setContentsMargins(18, 10, 10, 4)
+        title_bar.setSpacing(8)
 
-        self.title_icon = QLabel("🐙")
-        self.title_icon.setStyleSheet("font-size: 13px; background: transparent;")
-
-        self.provider_label = QLabel(get_ai_provider_display_name())
-        self.provider_label.setStyleSheet(
-            "color: white; font-size: 14px; font-weight: bold; background: transparent;"
+        app_title = QLabel("Meeting Assistant")
+        app_title.setStyleSheet(
+            f"color: {TEXT}; font-size: 13px; font-weight: 750;"
         )
 
-        self.status_dot = QLabel("●")
-        self.status_dot.setStyleSheet("color: #f0ad4e; font-size: 9px; background: transparent;")
-
-        self.status_text_label = QLabel("Inactivo")
-        self.status_text_label.setStyleSheet(
-            "color: #b8c4d0; font-size: 13px; background: transparent;"
+        always_on_top = QLabel("📌 Always on top")
+        always_on_top.setStyleSheet(
+            f"color: {MUTED}; font-size: 10px;"
         )
 
-        title_bar.addWidget(self.title_icon)
-        title_bar.addWidget(self.provider_label)
-        title_bar.addWidget(self.status_dot)
-        title_bar.addWidget(self.status_text_label)
+        close_button = QPushButton("×")
+        close_button.setFixedSize(30, 30)
+        close_button.setCursor(
+            Qt.CursorShape.PointingHandCursor
+        )
+        close_button.clicked.connect(self.close)
+        close_button.setStyleSheet(
+            """
+            QPushButton {
+                background: transparent;
+                color: #8f9baa;
+                border: none;
+                border-radius: 8px;
+                font-size: 19px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: rgba(255,80,80,50);
+                color: white;
+            }
+            """
+        )
+
+        title_bar.addWidget(app_title)
         title_bar.addStretch()
-        layout.addLayout(title_bar)
+        title_bar.addWidget(always_on_top)
+        title_bar.addWidget(close_button)
 
-        # --- Fila 2: Controles (pills) ---
-        controls_bar = QHBoxLayout()
-        controls_bar.setSpacing(8)
+        shell_layout.addLayout(title_bar)
 
-        self.lang_combo = QComboBox()
-        self.lang_combo.addItems(["🌐 Reunión: Español", "🌐 Reunión: Inglés"])
-        self.lang_combo.setCurrentIndex(1)
-        self.lang_combo.setStyleSheet(PILL_STYLE)
-        self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
-
-        self.assistant_btn = QPushButton("🤖 Asistente: OFF")
-        self.assistant_btn.setCheckable(True)
-        self.assistant_btn.setChecked(False)
-        self.assistant_btn.setStyleSheet(PILL_STYLE)
-        self.assistant_btn.clicked.connect(self._on_assistant_toggled)
-
-        self.listen_mode_combo = QComboBox()
-        self.listen_mode_combo.addItems([
-            "👥 Responde a: Compañeros",
-            "👥 Responde a: Yo",
-            "👥 Responde a: Ambos",
-        ])
-        listen_mode_map = {"compañeros": 0, "yo": 1, "ambos": 2}
-        self.listen_mode_combo.setCurrentIndex(listen_mode_map.get(get_assistant_listen_mode(), 2))
-        self.listen_mode_combo.setStyleSheet(PILL_STYLE)
-        self.listen_mode_combo.currentIndexChanged.connect(self._on_listen_mode_changed)
-
-        self.start_btn = QPushButton("▶ Iniciar")
-        self.start_btn.setStyleSheet(START_BTN_STYLE)
-        self.start_btn.clicked.connect(self._on_start_clicked)
-
-        self.close_btn = QPushButton("✕")
-        self.close_btn.setFixedSize(36, 36)
-        self.close_btn.setStyleSheet(CLOSE_BTN_STYLE)
-        self.close_btn.clicked.connect(self.close)
-
-        controls_bar.addWidget(self.lang_combo)
-        controls_bar.addWidget(self.assistant_btn)
-        controls_bar.addWidget(self.listen_mode_combo)
-        controls_bar.addStretch()
-        controls_bar.addWidget(self.start_btn)
-        controls_bar.addWidget(self.close_btn)
-        layout.addLayout(controls_bar)
-
-        # --- Tarjetas de subtítulo: EN (inmediato) + ES (llega async después) ---
-        subtitle_row = QHBoxLayout()
-        subtitle_row.setSpacing(12)
-
-        self.subtitle_card, self.subtitle_badge, self.subtitle_icon, self.subtitle_text, self.subtitle_time = \
-            self._build_card("EN", "#4da6ff", "rgba(30,45,70,200)")
-        self.subtitle_es_card, self.subtitle_es_badge, self.subtitle_es_icon, self.subtitle_es_text, self.subtitle_es_time = \
-            self._build_card("ES", "#57c785", "rgba(20,45,35,200)")
-
-        subtitle_row.addWidget(self.subtitle_card)
-        subtitle_row.addWidget(self.subtitle_es_card)
-
-        # --- Tarjetas de Pregunta/Respuesta (dependen solo del estado del asistente) ---
-        cards_row = QHBoxLayout()
-        cards_row.setSpacing(12)
-
-        self.en_card, self.en_badge, self.en_icon, self.en_text, self.en_time = self._build_card(
-            "PREGUNTA", "#4da6ff", "rgba(30,45,70,200)"
-        )
-        self.es_card, self.es_badge, self.es_icon, self.es_text, self.es_time = self._build_card(
-            "RESPUESTA", "#57c785", "rgba(20,45,35,200)"
-        )
-
-        cards_row.addWidget(self.en_card)
-        cards_row.addWidget(self.es_card)
-
-        layout.addLayout(subtitle_row)
-        layout.addLayout(cards_row)
-
-        # --- Historial colapsable ---
-        self.history_toggle_btn = QPushButton("▾ Historial")
-        self.history_toggle_btn.setFlat(True)
-        self.history_toggle_btn.setStyleSheet("color: #aaaaaa; text-align: left; border: none;")
-        self.history_toggle_btn.clicked.connect(self._toggle_history)
-
-        self.history_box = QTextEdit()
-        self.history_box.setReadOnly(True)
-        self.history_box.setVisible(False)
-        self.history_box.setStyleSheet(
-            "background-color: rgba(255,255,255,10); color: #dddddd; border: none; "
-            "border-radius: 8px; font-size: 12px;"
-        )
-        self.history_box.setMaximumHeight(100)
-
-        layout.addWidget(self.history_toggle_btn)
-        layout.addWidget(self.history_box)
-
-        self._set_placeholder_texts()
-        self._apply_view_mode()
-
-        self._on_language_changed(self.lang_combo.currentIndex())
-        self._on_assistant_toggled(self.assistant_btn.isChecked())
-
-    def _build_card(self, badge_text, badge_color, bg_color):
-        card = QFrame()
-        card.setStyleSheet(f"""
-            QFrame {{
-                background-color: {bg_color};
-                border-radius: 14px;
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.setStyleSheet(
+            f"""
+            QTabWidget::pane {{
+                border: none;
+                background: transparent;
             }}
-        """)
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(14, 12, 14, 12)
-        card_layout.setSpacing(8)
-
-        header = QHBoxLayout()
-        badge = QLabel(badge_text)
-        badge.setFixedHeight(22)
-        badge.setStyleSheet(
-            f"background-color: {badge_color}; color: white; font-size: 11px; "
-            f"font-weight: bold; border-radius: 11px; padding: 2px 12px;"
+            QTabBar {{
+                background: transparent;
+            }}
+            QTabBar::tab {{
+                background: transparent;
+                color: {MUTED};
+                border: none;
+                padding: 9px 18px;
+                margin-left: 8px;
+                font-size: 12px;
+                font-weight: 650;
+            }}
+            QTabBar::tab:selected {{
+                color: {TEXT};
+                border-bottom: 2px solid {BLUE};
+            }}
+            QTabBar::tab:hover {{
+                color: {TEXT};
+            }}
+            """
         )
-        header.addWidget(badge)
-        header.addStretch()
-        card_layout.addLayout(header)
 
-        content_row = QHBoxLayout()
-        content_row.setSpacing(8)
-        icon = QLabel("💬")
-        icon.setStyleSheet("font-size: 16px; background: transparent;")
-        icon.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.subtitle_tab = SubtitleTab()
+        self.assistant_tab = AssistantTab()
 
-        text_col = QVBoxLayout()
-        text_col.setSpacing(4)
-        text_label = QLabel("")
-        text_label.setWordWrap(True)
-        text_label.setStyleSheet("color: #d8d8d8; font-size: 14px; background: transparent;")
+        self.tabs.addTab(self.subtitle_tab, "Subtítulo")
+        self.tabs.addTab(self.assistant_tab, "Asistente")
 
-        time_label = QLabel("")
-        time_label.setStyleSheet("color: #888888; font-size: 10px; background: transparent;")
-        time_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        # Stage 1 is always selected when the app starts.
+        self.tabs.setCurrentIndex(0)
 
-        text_col.addWidget(text_label)
-        text_col.addWidget(time_label)
+        shell_layout.addWidget(self.tabs, 1)
 
-        content_row.addWidget(icon)
-        content_row.addLayout(text_col, stretch=1)
-        card_layout.addLayout(content_row)
-        card_layout.addStretch()
-
-        return card, badge, icon, text_label, time_label
-
-    def _set_placeholder_texts(self):
-        self.subtitle_text.setText("Aquí aparecerá la transcripción en inglés...")
-        self.subtitle_text.setStyleSheet("color: #7a8a9a; font-size: 14px; font-style: italic;")
-        self.subtitle_time.setText("")
-
-        self.subtitle_es_text.setText("La traducción aparecerá aquí...")
-        self.subtitle_es_text.setStyleSheet("color: #7a8a9a; font-size: 14px; font-style: italic;")
-        self.subtitle_es_time.setText("")
-
-        self.en_text.setText("Esperando tu pregunta...")
-        self.en_text.setStyleSheet("color: #7a8a9a; font-size: 14px; font-style: italic;")
-        self.es_text.setText("La respuesta aparecerá aquí...")
-        self.es_text.setStyleSheet("color: #7a8a9a; font-size: 14px; font-style: italic;")
-        self.en_time.setText("")
-        self.es_time.setText("")
-
-    def _connect_signals(self):
-        self.bridge.status_changed.connect(self._on_status_changed)
-        self.bridge.subtitle_ready.connect(self._on_subtitle_ready)
-        self.bridge.subtitle_translated.connect(self._on_subtitle_translated)
-        self.bridge.subtitle_partial.connect(self._on_subtitle_partial)
-        self.bridge.question_ready.connect(self._on_question_ready)
-        self.bridge.assistant_state_changed.connect(self._on_assistant_state_changed)
-        self.bridge.answer_ready.connect(self._on_answer_ready)
-        self.bridge.answer_error.connect(self._on_answer_error)
-
-    # ---------- Modo de vista: subtítulo único (independiente) + pregunta/respuesta (independiente) ----------
-    def _apply_view_mode(self):
-        assistant_on = get_assistant_enabled()
-        is_english_meeting = get_language_mode() == "en"
-
-        # Tarjetas de subtítulo: dependen SOLO del idioma de reunión (EN), sin importar el asistente
-        self.subtitle_card.setVisible(is_english_meeting)
-        self.subtitle_es_card.setVisible(is_english_meeting)
-
-        # Tarjetas de pregunta/respuesta: dependen SOLO del estado del asistente
-        self.en_card.setVisible(assistant_on)
-        self.es_card.setVisible(assistant_on)
-
-    def _apply_assistant_badges(self):
-        lang_label = "EN" if get_language_mode() == "en" else "ES"
-        self.en_badge.setText(f"PREGUNTA · {lang_label}")
-        self.es_badge.setText(f"RESPUESTA · {lang_label}")
-
-    # ---------- Handlers UI ----------
-    def _on_language_changed(self, index):
-        mode = "en" if index == 1 else "es"
-        set_language_mode(mode)
-        if get_assistant_enabled():
-            self._apply_assistant_badges()
-        self._apply_view_mode()
-
-        # Si la app ya está corriendo, reinicia solo el micrófono con el nuevo idioma,
-        # sin afectar el loopback de "Compañeros" ni pedir un "Detener" manual.
-        if self.controller:
-            threading.Thread(
-                target=self.controller.restart_mic_language, args=(mode,), daemon=True
-            ).start()
-
-        self._schedule_resize()
-
-    def _on_assistant_toggled(self, checked):
-        set_assistant_enabled(checked)
-        if checked:
-            self.assistant_btn.setText("🤖 Asistente: ON")
-            self.assistant_btn.setStyleSheet(ASSISTANT_BTN_ON_STYLE)
-            self._apply_assistant_badges()
-            self.en_icon.setText("🧑")
-            self.es_icon.setText("🤖")
-        else:
-            self.assistant_btn.setText("🤖 Asistente: OFF")
-            self.assistant_btn.setStyleSheet(PILL_STYLE)
-            self.en_icon.setText("💬")
-            self.es_icon.setText("💬")
-        self._set_placeholder_texts()
-        self._apply_view_mode()
-        self._schedule_resize()
-
-    def _toggle_history(self):
-        visible = not self.history_box.isVisible()
-        self.history_box.setVisible(visible)
-        self.history_toggle_btn.setText("▴ Historial" if visible else "▾ Historial")
-        self._schedule_resize()
-
-    def _on_start_clicked(self):
-        if self.controller:
-            return
-        self.start_btn.setEnabled(False)
-        self.start_btn.setText("Cargando...")
-
-        callbacks = {
-            "on_status": lambda text: self.bridge.status_changed.emit(text),
-            "on_subtitle": lambda source, en, segment_id: self.bridge.subtitle_ready.emit(
-                source, en, segment_id
-            ),
-            "on_subtitle_translated": lambda source, es, segment_id: self.bridge.subtitle_translated.emit(
-                source, es, segment_id
-            ),
-            "on_subtitle_partial": lambda source, en: self.bridge.subtitle_partial.emit(source, en),
-            "on_question": lambda source, q: self.bridge.question_ready.emit(source, q),
-            "on_assistant_state": lambda text: self.bridge.assistant_state_changed.emit(text),
-            "on_answer": lambda a: self.bridge.answer_ready.emit(a),
-            "on_answer_error": lambda e: self.bridge.answer_error.emit(e),
-        }
-
-        self.controller = ListenerController(callbacks)
-        threading.Thread(target=self.controller.start, daemon=True).start()
-        self.start_btn.setText("■ Detener")
-        self.start_btn.setEnabled(True)
-        self.start_btn.clicked.disconnect()
-        self.start_btn.clicked.connect(self._on_stop_clicked)
-
-    def _on_stop_clicked(self):
-        if self.controller:
-            self.controller.stop()
-            self.controller = None
-        self.start_btn.setText("▶ Iniciar")
-        self.start_btn.clicked.disconnect()
-        self.start_btn.clicked.connect(self._on_start_clicked)
-
-    # ---------- Slots conectados a señales ----------
-    def _on_status_changed(self, text):
-        self._is_listening = text.startswith("Escuchando")
-        is_active = text not in ("Inactivo", "Detenido", "")
-
-        color = "#5cb85c" if self._is_listening else ("#f0ad4e" if is_active else "#888888")
-        self.status_dot.setStyleSheet(f"color: {color}; font-size: 9px; background: transparent;")
-        self.status_text_label.setText(text if text else "Inactivo")
-        self.provider_label.setText(get_ai_provider_display_name())
-        self._schedule_resize()
-
-    def _on_subtitle_partial(self, source, en_text):
-        if get_language_mode() != "en":
-            return
-
-        color = SOURCE_COLORS.get(source, "#ffffff")
-        self.subtitle_text.setStyleSheet("color: #b8c4d0; font-size: 14px; font-style: italic;")
-        self.subtitle_text.setText(f'<span style="color:{color}; font-weight:bold;">[{source}]</span> {en_text}')
-        self._schedule_resize()
-
-    def _on_subtitle_ready(self, source, en_text, segment_id):
-        if get_language_mode() != "en":
-            return
-
-        last_id = self._last_subtitle_segment_id.get(source, 0)
-        if segment_id < last_id:
-            return
-        self._last_subtitle_segment_id[source] = segment_id
-
-        color = SOURCE_COLORS.get(source, "#ffffff")
-        self.subtitle_text.setStyleSheet("color: #e8e8e8; font-size: 14px;")
-        self.subtitle_text.setText(f'<span style="color:{color}; font-weight:bold;">[{source}]</span> {en_text}')
-        self.subtitle_time.setText(_now())
-        self._append_history(f"[{source}] {en_text}")
-        self._schedule_resize()
-
-    def _on_subtitle_translated(self, source, es_text, segment_id):
-        if get_language_mode() != "en":
-            return
-
-        last_id = self._last_subtitle_segment_id.get(source, 0)
-        if segment_id < last_id:
-            return  # llegó tarde, ya hay un segmento más nuevo mostrado
-
-        color = SOURCE_COLORS.get(source, "#ffffff")
-        self.subtitle_es_text.setStyleSheet("color: #e8e8e8; font-size: 14px;")
-        self.subtitle_es_text.setText(f'<span style="color:{color}; font-weight:bold;">[{source}]</span> {es_text}')
-        self.subtitle_es_time.setText(_now())
-        self._schedule_resize()
-
-    def _on_question_ready(self, source, question):
-        if not get_assistant_enabled():
-            return
-        color = SOURCE_COLORS.get(source, "#ffd479")
-        self.es_text.setStyleSheet("color: #7a8a9a; font-size: 14px; font-style: italic;")
-        self.es_text.setText("Pensando...")
-        self.es_time.setText("")
-
-        self.en_text.setStyleSheet("color: #e8e8e8; font-size: 14px;")
-        self.en_text.setText(f'<span style="color:{color}; font-weight:bold;">[{source}]</span> {question}')
-        self.en_time.setText(_now())
-        self._schedule_resize()
-
-    def _on_assistant_state_changed(self, state_text):
-        if not get_assistant_enabled():
-            return
-        self.es_text.setStyleSheet("color: #7a8a9a; font-size: 14px; font-style: italic;")
-        self.es_text.setText(state_text)
-        self._schedule_resize()
-
-    def _on_answer_ready(self, answer):
-        if not get_assistant_enabled():
-            return
-        self.es_text.setStyleSheet("color: #e8e8e8; font-size: 14px;")
-        self.es_text.setText(answer)
-        self.es_time.setText(_now())
-        q = self.en_text.text()
-        self._append_history(f"[P] {q}\n[R] {answer}")
-        self._schedule_resize()
-
-    def _on_answer_error(self, error_text):
-        if not get_assistant_enabled():
-            return
-        self.es_text.setStyleSheet("color: #ff8888; font-size: 14px;")
-        self.es_text.setText(error_text)
-        self.es_time.setText(_now())
-        self._schedule_resize()
-
-    def _append_history(self, entry):
-        self.history_box.append(entry)
-        self.history_box.append("-" * 30)
-
-    def _on_listen_mode_changed(self, index):
-        mode_map = {0: "compañeros", 1: "yo", 2: "ambos"}
-        set_assistant_listen_mode(mode_map.get(index, "ambos"))
-
-    # ---------- Arrastrar ventana ----------
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._drag_pos = (
+                event.globalPosition().toPoint()
+                - self.frameGeometry().topLeft()
+            )
+        super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event):
-        if self._drag_pos and event.buttons() == Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
+    def mouseMoveEvent(self, event) -> None:
+        if (
+            self._drag_pos is not None
+            and event.buttons() & Qt.MouseButton.LeftButton
+        ):
+            self.move(
+                event.globalPosition().toPoint() - self._drag_pos
+            )
+        super().mouseMoveEvent(event)
 
-    def closeEvent(self, event):
-        if self.controller:
-            try:
-                self.controller.stop()
-            except Exception:
-                pass
-            self.controller = None
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
+
+    def closeEvent(self, event) -> None:
+        self.subtitle_tab.shutdown()
+        self.assistant_tab.shutdown()
         event.accept()
 
-        def _force_kill():
-            time.sleep(4.0)
-            os._exit(0)
 
-        threading.Thread(target=_force_kill, daemon=True).start()
-
-
-def main():
+def main() -> None:
     app = QApplication(sys.argv)
-    window = OverlayWindow()
+    app.setStyle("Fusion")
+
+    window = MainWindow()
     window.show()
-    exit_code = app.exec()
-    os._exit(exit_code)
+
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
