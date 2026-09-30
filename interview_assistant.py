@@ -17,6 +17,7 @@ from groq import Groq
 
 from config import (
     GROQ_CODING_MAX_COMPLETION_TOKENS,
+    GROQ_CONTINUATION_MAX_COMPLETION_TOKENS,
     GROQ_MAX_COMPLETION_TOKENS,
     GROQ_MODEL,
     GROQ_REASONING_EFFORT,
@@ -39,7 +40,10 @@ For simple definition/difference questions: definition + key distinction + one p
 For architecture/system-design questions: approach + main trade-off + one practical detail.
 Use the ongoing interview context to resolve follow-ups and pronouns.
 When relevant senior-developer profile context is provided, use it as supporting background without repeating it mechanically.
-Do not invent personal experience, employers, incidents, metrics, or projects beyond what the provided profile context explicitly supports.
+PERSONAL EXPERIENCE IS A STRICT FACTUAL BOUNDARY. General senior-profile knowledge is not evidence that the candidate personally did something.
+Unless the user content explicitly says VERIFIED PERSONAL EXPERIENCE IS AVAILABLE and provides those facts, never claim past personal actions such as "I used", "I implemented", "I configured", "I built", "I led", "I handled", or "in my project".
+If the interviewer asks "How did you use it?", "Tell me about a time...", or another experience-oriented question without verified experience, answer with a strong senior approach using conditional/present framing such as "I would", "The way I would approach it", or "A practical approach is".
+Do not invent personal experience, employers, incidents, metrics, or projects beyond verified profile facts.
 Return only the answer the interviewee could naturally say aloud."""
 
 SYSTEM_PROMPT_ES = """Eres un desarrollador senior ayudando durante una entrevista técnica en vivo.
@@ -55,7 +59,10 @@ Para definiciones o diferencias: definición + diferencia clave + un punto prác
 Para arquitectura/system design: enfoque + trade-off principal + un detalle práctico.
 Usa el contexto continuo de la entrevista para resolver follow-ups y pronombres.
 Cuando se proporcione contexto relevante del perfil senior, úsalo como apoyo sin repetirlo mecánicamente.
-No inventes experiencia personal, empleadores, incidentes, métricas ni proyectos más allá de lo que el perfil proporcionado soporte explícitamente.
+LA EXPERIENCIA PERSONAL ES UN LÍMITE FACTUAL ESTRICTO. El conocimiento general del perfil senior no demuestra que el candidato haya hecho algo personalmente.
+Salvo que el contenido del usuario indique explícitamente que HAY EXPERIENCIA PERSONAL VERIFICADA y proporcione esos hechos, nunca afirmes acciones pasadas como "yo usé", "implementé", "configuré", "construí", "lideré", "manejé" o "en mi proyecto".
+Si preguntan "¿cómo lo usaste?", "cuéntame de una vez..." u otra pregunta orientada a experiencia sin experiencia verificada, responde con un enfoque senior en condicional/presente como "yo lo abordaría", "la forma en que lo usaría" o "un enfoque práctico sería".
+No inventes experiencia personal, empleadores, incidentes, métricas ni proyectos fuera de hechos verificados del perfil.
 Devuelve únicamente la respuesta que el entrevistado podría decir de forma natural."""
 
 CODING_PROMPT_EN = """You are a senior software engineer assisting during a live coding / whiteboarding interview.
@@ -538,6 +545,7 @@ class GroqInterviewAssistant:
         # on general profile material there. For regular questions, inject only
         # the few profile entries matching the reconstructed question/topic.
         skill_context = ""
+        has_verified_experience = False
         if not is_coding:
             skill_query = " ".join(
                 part
@@ -545,9 +553,12 @@ class GroqInterviewAssistant:
                 if part and part.strip()
             )
             try:
-                from skills_loader import build_context_block
+                from skills_loader import build_context_packet
 
-                skill_context = build_context_block(
+                (
+                    skill_context,
+                    has_verified_experience,
+                ) = build_context_packet(
                     skill_query,
                     language_mode=language,
                     max_matches=3,
@@ -560,6 +571,7 @@ class GroqInterviewAssistant:
                     f"continuando sin skill: {exc}"
                 )
                 skill_context = ""
+                has_verified_experience = False
 
         user_content = (
             f"Current interview topic:\n{topic_memory or '(unknown)'}\n\n"
@@ -572,6 +584,23 @@ class GroqInterviewAssistant:
                 "Relevant senior-developer profile context:\n"
                 f"{skill_context}\n\n"
             )
+
+        if not is_coding:
+            if has_verified_experience:
+                user_content += (
+                    "PERSONAL EXPERIENCE MODE: VERIFIED PERSONAL EXPERIENCE "
+                    "IS AVAILABLE. Use only the explicit verified-experience "
+                    "facts from the profile; do not add unstated details.\n\n"
+                )
+            else:
+                user_content += (
+                    "PERSONAL EXPERIENCE MODE: NO VERIFIED PERSONAL EXPERIENCE "
+                    "IS AVAILABLE FOR THIS QUESTION. Do not claim that the "
+                    "candidate previously used, implemented, configured, led, "
+                    "handled, or built something. If the question asks about "
+                    "past experience, answer with a senior hypothetical or "
+                    "recommended approach using present/conditional language.\n\n"
+                )
 
         if is_coding:
             user_content += (
@@ -592,12 +621,13 @@ class GroqInterviewAssistant:
             "using the recent conversation to resolve follow-ups."
         )
 
+        messages = [
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": user_content},
+        ]
         stream = self.client.chat.completions.create(
             model=self.model,
-            messages=[
-                {"role": "system", "content": instructions},
-                {"role": "user", "content": user_content},
-            ],
+            messages=messages,
             reasoning_effort=GROQ_REASONING_EFFORT,
             include_reasoning=False,
             max_completion_tokens=max_tokens,
@@ -606,15 +636,78 @@ class GroqInterviewAssistant:
         )
 
         collected: list[str] = []
+        finish_reason = ""
         for chunk in stream:
             if not chunk.choices:
                 continue
 
-            delta = chunk.choices[0].delta.content or ""
+            choice = chunk.choices[0]
+            if choice.finish_reason:
+                finish_reason = str(choice.finish_reason)
+
+            delta = choice.delta.content or ""
             if not delta:
                 continue
 
             collected.append(delta)
             on_delta(delta)
 
-        return "".join(collected).strip()
+        answer = "".join(collected).strip()
+
+        # Normal spoken answers should never end mid-sentence because the model
+        # exhausted its completion budget. Keep streaming and request one short
+        # continuation only when Groq explicitly reports finish_reason=length.
+        # Coding uses a much larger dedicated budget and is left untouched so a
+        # continuation cannot accidentally corrupt source code.
+        if (
+            finish_reason == "length"
+            and answer
+            and not is_coding
+        ):
+            print(
+                "[Stage2] Respuesta alcanzó el límite de tokens; "
+                "completando una vez."
+            )
+            continuation_messages = messages + [
+                {"role": "assistant", "content": answer},
+                {
+                    "role": "user",
+                    "content": (
+                        "Continue ONLY from the exact point where the previous "
+                        "answer stopped. Do not repeat earlier text. Finish the "
+                        "current thought naturally and concisely in no more "
+                        "than 40 additional words. Preserve the same language "
+                        "and the same personal-experience restrictions."
+                    ),
+                },
+            ]
+
+            continuation_stream = self.client.chat.completions.create(
+                model=self.model,
+                messages=continuation_messages,
+                reasoning_effort="low",
+                include_reasoning=False,
+                max_completion_tokens=(
+                    GROQ_CONTINUATION_MAX_COMPLETION_TOKENS
+                ),
+                temperature=0.1,
+                stream=True,
+            )
+
+            continuation_parts: list[str] = []
+            for chunk in continuation_stream:
+                if not chunk.choices:
+                    continue
+
+                delta = chunk.choices[0].delta.content or ""
+                if not delta:
+                    continue
+
+                continuation_parts.append(delta)
+                on_delta(delta)
+
+            continuation = "".join(continuation_parts)
+            if continuation:
+                answer = (answer + continuation).strip()
+
+        return answer
