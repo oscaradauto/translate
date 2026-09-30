@@ -704,6 +704,8 @@ class AssistantTab(QWidget):
         self._transcript_order: list[tuple[str, int]] = []
         self._max_transcript_entries = 30
         self._answer_buffer = ""
+        self._pending_answer_buffer = ""
+        self._answer_stream_started = False
         self._understood_question_text = ""
         self._pending_understood_question = ""
         self._pending_understood_topic = ""
@@ -1160,6 +1162,8 @@ class AssistantTab(QWidget):
         self._transcript_order.clear()
         self._conversation_history.clear()
         self._answer_buffer = ""
+        self._pending_answer_buffer = ""
+        self._answer_stream_started = False
         self._understood_question_text = ""
         self._pending_understood_question = ""
         self._pending_understood_topic = ""
@@ -1383,31 +1387,67 @@ class AssistantTab(QWidget):
         )
 
     def _on_answer_started(self, question: str) -> None:
-        self._answer_buffer = ""
-        self.answer_view.clear()
+        # Keep the previous confirmed answer visible until the new generation
+        # produces actual text. This prevents an empty/error response from
+        # leaving the interviewee with a blank panel.
+        self._pending_answer_buffer = ""
+        self._answer_stream_started = False
         self.answer_state.setText("Generating...")
         self.regenerate_button.setEnabled(False)
-        self.copy_answer_button.setEnabled(False)
+        self.copy_answer_button.setEnabled(bool(self._answer_buffer))
 
     def _on_answer_delta(self, delta: str) -> None:
-        self._answer_buffer += delta
-        self.answer_view.setPlainText(self._answer_buffer)
+        if not delta:
+            return
+
+        if not self._answer_stream_started:
+            self._answer_stream_started = True
+            self._pending_answer_buffer = ""
+            self.answer_view.clear()
+
+        self._pending_answer_buffer += delta
+        self.answer_view.setPlainText(self._pending_answer_buffer)
 
     def _on_answer_completed(self, answer: str) -> None:
-        if answer:
-            self._answer_buffer = answer
-            self.answer_view.setPlainText(answer)
+        completed = (answer or self._pending_answer_buffer).strip()
+
+        if completed:
+            self._answer_buffer = completed
+            self.answer_view.setPlainText(completed)
             self.answer_state.setText("Ready")
             self.regenerate_button.setEnabled(True)
             self.copy_answer_button.setEnabled(True)
             self.activity_label.setText("Answer ready")
         else:
-            self.answer_state.setText("No answer")
+            # No content arrived. Preserve the previous confirmed answer.
+            self.answer_state.setText(
+                "Previous answer"
+                if self._answer_buffer
+                else "No answer"
+            )
+            self.regenerate_button.setEnabled(bool(self._answer_buffer))
+            self.copy_answer_button.setEnabled(bool(self._answer_buffer))
+            self.activity_label.setText(
+                "No new answer generated"
+            )
+
+        self._pending_answer_buffer = ""
+        self._answer_stream_started = False
 
     def _on_assistant_error(self, text: str) -> None:
+        # Preserve a useful previous answer when a new generation fails.
+        self._pending_answer_buffer = ""
+        self._answer_stream_started = False
         self.answer_state.setText("Error")
-        self.answer_view.setPlainText(f"Error: {text}")
-        self.activity_label.setText("Check configuration / console")
+        self.regenerate_button.setEnabled(bool(self._answer_buffer))
+        self.copy_answer_button.setEnabled(bool(self._answer_buffer))
+
+        if not self._answer_buffer:
+            self.answer_view.setPlainText(f"Error: {text}")
+
+        self.activity_label.setText(
+            f"Assistant error: {text}"
+        )
 
     def _answer_last(self) -> None:
         if self.controller is not None:
