@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 from collections import Counter, deque
 from typing import Callable
 
@@ -79,6 +80,18 @@ class InterviewController:
         self._topic_memory = ""
         self._deferred_response_text = ""
         self._deferred_response_speaker = ""
+
+    @staticmethod
+    def _diag(event: str, **fields) -> None:
+        """Metadata-only Stage 2 diagnostics; never prints transcript text."""
+        stamp = time.strftime("%H:%M:%S")
+        details = " ".join(
+            f"{key}={value}"
+            for key, value in fields.items()
+            if value not in {"", None}
+        )
+        suffix = f" {details}" if details else ""
+        print(f"[Stage2Diag {stamp}] {event}{suffix}")
 
     def start(self) -> None:
         if self.running:
@@ -235,6 +248,22 @@ class InterviewController:
         self._start_answer(question, force=True)
 
     def _on_listener_status(self, text: str) -> None:
+        prefix = "__STAGE2_LATENCY__:"
+        if text.startswith(prefix):
+            try:
+                _, stage, value = text.split(":", 2)
+                latency_ms = float(value)
+            except (ValueError, TypeError):
+                return
+
+            self._emit("on_latency", stage, latency_ms)
+            self._diag(
+                "latency",
+                stage=stage,
+                ms=f"{latency_ms:.1f}",
+            )
+            return
+
         self._emit("on_status", text)
 
     def _on_transcription_error(
@@ -282,6 +311,12 @@ class InterviewController:
             return
 
         speaker = "YOU" if source == "YOU" else "INTERVIEWER"
+        self._diag(
+            "stt_final",
+            speaker=speaker,
+            segment=segment_id,
+            chars=len(cleaned),
+        )
 
         if self._is_low_quality_transcript(cleaned):
             print(
@@ -468,6 +503,11 @@ class InterviewController:
                 self._queued_answer_speaker = speaker
                 self._queued_answer_force = force
 
+            self._diag(
+                "answer_queued",
+                speaker=speaker or "unknown",
+                force=force,
+            )
             self._emit("on_answer_queued", question.strip())
             return
 
@@ -576,11 +616,23 @@ class InterviewController:
             if assistant is None or not self.running:
                 return
 
+            analyze_started_at = time.perf_counter()
             analysis = assistant.analyze_turn(
                 raw_turn=question,
                 recent_turns=recent_turns,
                 topic_memory=self._topic_memory,
                 coding_context=self._coding_context,
+            )
+            analyze_ms = (
+                time.perf_counter() - analyze_started_at
+            ) * 1000.0
+            self._emit("on_latency", "analyze", analyze_ms)
+            self._diag(
+                "latency",
+                stage="analyze",
+                ms=f"{analyze_ms:.1f}",
+                type=analysis.interview_type,
+                action=analysis.action,
             )
 
             if analysis.topic or analysis.terms:
@@ -647,6 +699,7 @@ class InterviewController:
             self._emit("on_answer_started", reconstructed)
 
             generated_answer = ""
+            generation_started_at = time.perf_counter()
 
             # A rare Groq stream can finish successfully without returning
             # usable content. Retry exactly once with the same question,
@@ -685,6 +738,18 @@ class InterviewController:
                         "reintentando una vez."
                     )
                     self._emit("on_answer_retrying")
+
+            answer_ms = (
+                time.perf_counter() - generation_started_at
+            ) * 1000.0
+            self._emit("on_latency", "answer", answer_ms)
+            self._diag(
+                "latency",
+                stage="answer",
+                ms=f"{answer_ms:.1f}",
+                type=analysis.interview_type,
+                produced=bool(generated_answer),
+            )
 
             if generated_answer:
                 self._last_answer = generated_answer
