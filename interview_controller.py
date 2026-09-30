@@ -319,9 +319,11 @@ class InterviewController:
         )
 
         if self._is_low_quality_transcript(cleaned):
-            print(
-                f"[Stage2:{speaker}] Descarta transcripción ruidosa: "
-                f"{cleaned[:160]}"
+            self._diag(
+                "stt_rejected",
+                speaker=speaker,
+                segment=segment_id,
+                chars=len(cleaned),
             )
             self._emit(
                 "on_transcript_rejected",
