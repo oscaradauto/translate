@@ -1173,6 +1173,101 @@ class AssistantTab(QWidget):
 
         root.addLayout(actions)
 
+    @staticmethod
+    def _select_combo_data(combo: QComboBox, value: str) -> None:
+        for index in range(combo.count()):
+            if str(combo.itemData(index)) == value:
+                combo.setCurrentIndex(index)
+                return
+
+    def _load_persisted_settings(self) -> None:
+        response_scope = str(
+            self._settings.value(
+                "stage2/response_scope",
+                "interviewer",
+            )
+        )
+        answer_language = str(
+            self._settings.value(
+                "stage2/answer_language",
+                "en",
+            )
+        )
+        capture_mode = str(
+            self._settings.value(
+                "stage2/capture_mode",
+                "hidden",
+            )
+        )
+
+        self._select_combo_data(
+            self.response_scope_combo,
+            response_scope,
+        )
+        self._select_combo_data(
+            self.language_combo,
+            answer_language,
+        )
+        self._select_combo_data(
+            self.capture_mode_combo,
+            capture_mode,
+        )
+        self._set_capture_status("idle")
+
+    def _persist_setting(self, key: str, value: str) -> None:
+        self._settings.setValue(f"stage2/{key}", value)
+        self._settings.sync()
+
+    def _setup_shortcuts(self) -> None:
+        definitions = {
+            "answer_last": ("F8", self._answer_last),
+            "regenerate": ("F9", self._regenerate),
+            "copy_answer": ("Ctrl+Shift+C", self._copy_answer),
+            "copy_code": ("Ctrl+Alt+C", self._copy_code),
+        }
+
+        for name, (default, handler) in definitions.items():
+            stored = str(
+                self._settings.value(
+                    f"stage2/shortcut_{name}",
+                    default,
+                )
+            )
+            shortcut = QShortcut(
+                QKeySequence(stored),
+                self,
+            )
+            shortcut.setContext(
+                Qt.ShortcutContext.WidgetWithChildrenShortcut
+            )
+            shortcut.activated.connect(handler)
+            self._shortcuts[name] = shortcut
+
+    def shortcut_sequence(self, name: str) -> QKeySequence:
+        shortcut = self._shortcuts.get(name)
+        if shortcut is None:
+            return QKeySequence()
+        return shortcut.key()
+
+    def set_shortcut_sequence(
+        self,
+        name: str,
+        sequence: QKeySequence,
+    ) -> None:
+        shortcut = self._shortcuts.get(name)
+        if shortcut is None:
+            return
+
+        shortcut.setKey(sequence)
+        portable = sequence.toString(
+            QKeySequence.SequenceFormat.PortableText
+        )
+        self._settings.setValue(
+            f"stage2/shortcut_{name}",
+            portable,
+        )
+        self._settings.sync()
+
     def _connect_signals(self) -> None:
         self.bridge.status_changed.connect(self._on_status_changed)
         self.bridge.transcript_partial.connect(
@@ -1374,6 +1469,7 @@ class AssistantTab(QWidget):
 
     def _on_capture_mode_changed(self, _index: int = -1) -> None:
         mode = self._capture_mode()
+        self._persist_setting("capture_mode", mode)
         session_active = (
             self.controller is not None
             or self._starting
@@ -1524,6 +1620,10 @@ class AssistantTab(QWidget):
                 lambda text:
                 self.bridge.service_error.emit(text)
             ),
+            "on_latency": (
+                lambda stage, ms:
+                self.bridge.latency_updated.emit(stage, ms)
+            ),
         }
 
         from interview_controller import InterviewController
@@ -1582,6 +1682,14 @@ class AssistantTab(QWidget):
         self._pending_understood_language = ""
         self._has_any_turn = False
         self._has_interviewer_turn = False
+        self._latencies = {
+            "stt": None,
+            "analyze": None,
+            "answer": None,
+        }
+        self._refresh_latency_label()
+        self.copy_code_button.setEnabled(False)
+        self.copy_code_button.setVisible(False)
 
         self.transcript_view.setPlainText(
             "Listening for YOU and INTERVIEWER..."
@@ -1599,18 +1707,19 @@ class AssistantTab(QWidget):
         self.copy_answer_button.setEnabled(False)
 
     def _on_language_changed(self, _index: int = -1) -> None:
-        controller = self.controller
-        if controller is None:
-            return
-
         language = self.language_combo.currentData() or "en"
-        controller.set_language(language)
+        self._persist_setting("answer_language", language)
+
+        controller = self.controller
+        if controller is not None:
+            controller.set_language(language)
 
     def _on_response_scope_changed(self, _index: int = -1) -> None:
         scope = (
             self.response_scope_combo.currentData()
             or "interviewer"
         )
+        self._persist_setting("response_scope", scope)
 
         if self.controller is not None:
             self.controller.set_response_scope(scope)
