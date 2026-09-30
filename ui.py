@@ -784,6 +784,7 @@ class AssistantTab(QWidget):
         self._starting = False
         self._stopping = False
         self._capture_exclusion_active = False
+        self._capture_exclusion_message = ""
 
         self._transcript_entries: dict[tuple[str, int], dict] = {}
         self._transcript_order: list[tuple[str, int]] = []
@@ -829,6 +830,15 @@ class AssistantTab(QWidget):
         self.status_label = QLabel("Ready")
         self.status_label.setStyleSheet(
             f"color: {MUTED}; font-size: 11px; background: transparent;"
+        )
+
+        self.capture_status_label = QLabel("Capture: normal")
+        self.capture_status_label.setStyleSheet(
+            f"color: {MUTED_DARK}; font-size: 10px; background: transparent;"
+        )
+        self.capture_status_label.setToolTip(
+            "Stage 2 intentará ocultar la ventana de capturas compatibles "
+            "al iniciar la entrevista."
         )
 
         input_label = QLabel("Input: Auto")
@@ -916,6 +926,8 @@ class AssistantTab(QWidget):
         header.addSpacing(4)
         header.addWidget(self.status_dot)
         header.addWidget(self.status_label)
+        header.addSpacing(3)
+        header.addWidget(self.capture_status_label)
         header.addStretch()
         header.addWidget(input_label)
         header.addSpacing(6)
@@ -1146,6 +1158,45 @@ class AssistantTab(QWidget):
         else:
             self._stop_session()
 
+    def _set_capture_status(
+        self,
+        active: bool,
+        message: str = "",
+    ) -> None:
+        self._capture_exclusion_active = active
+        self._capture_exclusion_message = message
+
+        if active:
+            self.capture_status_label.setText("🔒 Capture hidden")
+            self.capture_status_label.setStyleSheet(
+                f"color: {GREEN}; font-size: 10px; "
+                "font-weight: 700; background: transparent;"
+            )
+            self.capture_status_label.setToolTip(
+                message
+                or "Windows confirmó la exclusión de capturas compatibles."
+            )
+        elif message:
+            self.capture_status_label.setText("⚠ Capture visible")
+            self.capture_status_label.setStyleSheet(
+                f"color: {WARNING}; font-size: 10px; "
+                "font-weight: 700; background: transparent;"
+            )
+            self.capture_status_label.setToolTip(
+                "No se pudo ocultar la ventana. Stage 2 sigue funcionando. "
+                + message
+            )
+        else:
+            self.capture_status_label.setText("Capture: normal")
+            self.capture_status_label.setStyleSheet(
+                f"color: {MUTED_DARK}; font-size: 10px; "
+                "background: transparent;"
+            )
+            self.capture_status_label.setToolTip(
+                "Stage 2 intentará ocultar la ventana de capturas compatibles "
+                "al iniciar la entrevista."
+            )
+
     def _enable_capture_exclusion(self) -> bool:
         if self._capture_exclusion_active:
             return True
@@ -1155,59 +1206,46 @@ class AssistantTab(QWidget):
             True,
         )
         if ok:
-            self._capture_exclusion_active = True
+            self._set_capture_status(True, message)
             print("[Privacy] Stage 2 capture exclusion enabled.")
             return True
 
-        print(f"[Privacy] Capture exclusion failed: {message}")
-        QMessageBox.critical(
-            self,
-            "Protección de pantalla",
-            (
-                "Stage 2 no se inició porque no se pudo ocultar la ventana "
-                "de las capturas de pantalla compatibles.\n\n"
-                f"{message}\n\n"
-                "No compartas la pantalla completa suponiendo que la app "
-                "está oculta."
-            ),
-        )
+        self._set_capture_status(False, message)
+        print(f"[Privacy] Capture exclusion unavailable: {message}")
         return False
 
     def _disable_capture_exclusion(self) -> None:
-        if not self._capture_exclusion_active:
-            return
-
-        ok, message = _set_window_capture_exclusion(
-            self.window(),
-            False,
-        )
-        if ok:
-            self._capture_exclusion_active = False
-            print("[Privacy] Stage 2 capture exclusion disabled.")
-        else:
-            # Keep the flag true because Windows did not confirm removal.
-            print(
-                f"[Privacy] Could not disable capture exclusion: {message}"
+        if self._capture_exclusion_active:
+            ok, message = _set_window_capture_exclusion(
+                self.window(),
+                False,
             )
+            if ok:
+                print("[Privacy] Stage 2 capture exclusion disabled.")
+            else:
+                print(
+                    f"[Privacy] Could not disable capture exclusion: {message}"
+                )
+
+        # Once Stage 2 is no longer active, return the indicator to its normal
+        # state even if capture exclusion had not been available.
+        self._set_capture_status(False)
 
     def _start_session(self) -> None:
         self._starting = True
 
-        if not self._enable_capture_exclusion():
-            self._starting = False
-            self.status_dot.setStyleSheet(
-                f"color: {RED}; font-size: 9px; background: transparent;"
-            )
-            self.status_label.setText("Capture unsafe")
-            self.activity_label.setText(
-                "Stage 2 not started · capture protection failed"
-            )
-            self.interview_button.setText("▶  Iniciar entrevista")
-            self.interview_button.setEnabled(True)
-            self.verify_groq_button.setEnabled(True)
-            return
+        # Best-effort privacy: try to hide the entire app window from
+        # compatible Windows capture, but never block Stage 2 if unavailable.
+        capture_hidden = self._enable_capture_exclusion()
 
         self._clear_session_ui()
+        if not capture_hidden:
+            self.activity_label.setText(
+                "⚠ Capture visible · Stage 2 will continue normally"
+            )
+            self.activity_label.setToolTip(
+                self._capture_exclusion_message
+            )
 
         self.interview_button.setEnabled(False)
         self.verify_groq_button.setEnabled(False)
@@ -1387,7 +1425,7 @@ class AssistantTab(QWidget):
             self.activity_label.setText(
                 f"{listening_text} · Capture hidden"
                 if self._capture_exclusion_active
-                else listening_text
+                else f"{listening_text} · ⚠ Capture visible"
             )
 
         self._refresh_answer_last_button()
@@ -1833,13 +1871,19 @@ class AssistantTab(QWidget):
             self.activity_label.setText(
                 f"{listening_text} · Capture hidden"
                 if self._capture_exclusion_active
-                else listening_text
+                else f"{listening_text} · ⚠ Capture visible"
             )
             self.activity_label.setToolTip(
-                "La ventana principal está excluida de capturas compatibles "
-                "mientras Stage 2 está activo."
+                (
+                    "La ventana principal está excluida de capturas compatibles "
+                    "mientras Stage 2 está activo."
+                )
                 if self._capture_exclusion_active
-                else ""
+                else (
+                    "Stage 2 sigue funcionando, pero Windows no pudo confirmar "
+                    "la exclusión de captura. "
+                    + self._capture_exclusion_message
+                )
             )
             return
 
