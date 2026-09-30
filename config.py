@@ -153,6 +153,20 @@ GROQ_MAX_COMPLETION_TOKENS = int(
     os.getenv("GROQ_MAX_COMPLETION_TOKENS", "180")
 )
 
+# Coding / whiteboarding answers may need a short explanation plus a complete
+# implementation. Keep this separate from normal technical answers so regular
+# interview responses remain concise.
+GROQ_CODING_MAX_COMPLETION_TOKENS = int(
+    os.getenv("GROQ_CODING_MAX_COMPLETION_TOKENS", "650")
+)
+
+# Default implementation language for coding follow-ups such as
+# "implement it" or "do the same with streams".
+INTERVIEW_CODE_LANGUAGE = os.getenv(
+    "INTERVIEW_CODE_LANGUAGE",
+    "java",
+).strip().lower()
+
 # Keep enough recent turns to resolve follow-up questions such as
 # "and what happens if it fails?" without sending the full interview.
 INTERVIEW_CONTEXT_TURNS = int(
