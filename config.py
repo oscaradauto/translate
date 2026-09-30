@@ -1,7 +1,7 @@
 """Application configuration.
 
-Stage 1 uses Faster-Whisper locally and is always English.
-Stage 2 has its own response-language configuration and will use OpenAI.
+Stage 1 uses English-only Faster-Whisper locally.
+Stage 2 uses multilingual Faster-Whisper plus Groq during development.
 """
 
 from __future__ import annotations
