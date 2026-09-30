@@ -2666,6 +2666,24 @@ class SettingsTab(QWidget):
         root.addWidget(heading)
         root.addWidget(subtitle)
 
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+        )
+
+        body = QWidget()
+        body.setStyleSheet("background: transparent;")
+        content = QVBoxLayout(body)
+        content.setContentsMargins(0, 0, 4, 0)
+        content.setSpacing(12)
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
+
         interview_card, interview = self._card()
         interview.addWidget(self._section_title("Interview"))
 
@@ -2700,7 +2718,7 @@ class SettingsTab(QWidget):
                 "Ambos es útil para pruebas."
             )
         )
-        root.addWidget(interview_card)
+        content.addWidget(interview_card)
 
         shortcuts_card, shortcuts = self._card()
         shortcuts.addWidget(self._section_title("Keyboard shortcuts"))
@@ -2727,7 +2745,7 @@ class SettingsTab(QWidget):
                 "guardan automáticamente para la próxima ejecución."
             )
         )
-        root.addWidget(shortcuts_card)
+        content.addWidget(shortcuts_card)
 
         privacy_card, privacy = self._card()
         privacy.addWidget(self._section_title("Privacy & screen sharing"))
@@ -2747,7 +2765,7 @@ class SettingsTab(QWidget):
                 "captura normal. El cambio se aplica también durante Stage 2."
             )
         )
-        root.addWidget(privacy_card)
+        content.addWidget(privacy_card)
 
         services_card, services = self._card()
         services.addWidget(self._section_title("Groq services"))
@@ -2784,9 +2802,41 @@ class SettingsTab(QWidget):
                 "de una entrevista. No cambia la configuración del asistente."
             )
         )
-        root.addWidget(services_card)
+        content.addWidget(services_card)
 
-        root.addStretch()
+        diagnostics_card, diagnostics = self._card()
+        diagnostics.addWidget(self._section_title("Diagnostics"))
+
+        privacy_row = QHBoxLayout()
+        privacy_row.addWidget(self._row_label("Conversation content"))
+        privacy_value = QLabel("Not logged")
+        privacy_value.setStyleSheet(
+            f"color: {GREEN}; font-size: 11px; background: transparent;"
+        )
+        privacy_row.addWidget(privacy_value)
+        privacy_row.addStretch()
+        diagnostics.addLayout(privacy_row)
+
+        metadata_row = QHBoxLayout()
+        metadata_row.addWidget(self._row_label("Runtime metadata"))
+        metadata_value = QLabel("Console only")
+        metadata_value.setStyleSheet(
+            f"color: {TEXT}; font-size: 11px; background: transparent;"
+        )
+        metadata_row.addWidget(metadata_value)
+        metadata_row.addStretch()
+        diagnostics.addLayout(metadata_row)
+
+        diagnostics.addWidget(
+            self._hint(
+                "Stage 2 registra solo eventos y métricas como latencia, "
+                "speaker, segment id y tamaño del texto; no imprime la "
+                "conversación en los logs de diagnóstico."
+            )
+        )
+        content.addWidget(diagnostics_card)
+
+        content.addStretch()
 
 
 class MainWindow(QWidget):
