@@ -695,7 +695,15 @@ class SubtitleTab(QWidget):
         dialog.exec()
 
     def _on_status_changed(self, text: str) -> None:
-        loading = text.startswith("Cargando")
+        if text.startswith("Groq STT listo"):
+            self._set_health(groq="✓")
+            self.status_label.setText("Loading")
+            return
+
+        loading = (
+            text.startswith("Cargando")
+            or text.startswith("Preparando")
+        )
         listening = text.startswith("Escuchando")
         stopped = text == "Detenido"
         error = text.startswith("Error")
@@ -2620,7 +2628,6 @@ class SettingsTab(QWidget):
         editor = QKeySequenceEdit(
             self.assistant_tab.shortcut_sequence(name)
         )
-        editor.setMaximumSequenceLength(1)
         editor.setMinimumWidth(180)
         editor.setStyleSheet(
             f"""
