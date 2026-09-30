@@ -504,13 +504,13 @@ class InterviewController:
             constraints = analysis.coding_constraints
             last_solution = ""
         else:
-            constraints = tuple(
-                dict.fromkeys(
-                    (
-                        *current.constraints,
-                        *analysis.coding_constraints,
-                    )
-                )
+            # The contextualizer returns the full currently-active constraint
+            # set, so a follow-up can replace an obsolete constraint instead
+            # of accumulating contradictions forever.
+            constraints = (
+                analysis.coding_constraints
+                if analysis.coding_constraints
+                else current.constraints
             )
             last_solution = current.last_solution
 
