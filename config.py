@@ -84,30 +84,33 @@ WHISPER_INITIAL_PROMPT = os.getenv(
 
 
 # ---------------------------------------------------------------------------
-# Stage 2 - Assistant (kept independent from Stage 1)
+# Stage 2 - Technical interview assistant
 # ---------------------------------------------------------------------------
 
 ASSISTANT_LANGUAGE = os.getenv("ASSISTANT_LANGUAGE", "en")
-AI_PROVIDER = os.getenv("AI_PROVIDER", "openai")
+AI_PROVIDER = os.getenv("AI_PROVIDER", "groq")
 
-# Stage 2 uses local Faster-Whisper for interview transcription and OpenAI only
-# for technical answers.
-OPENAI_ASSISTANT_MODEL = os.getenv(
-    "OPENAI_ASSISTANT_MODEL",
-    "gpt-5.6-sol",
+# Groq is used during development for technical reasoning. Transcription stays
+# local with Faster-Whisper, so Groq only receives text/context.
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+GROQ_REASONING_EFFORT = os.getenv(
+    "GROQ_REASONING_EFFORT",
+    "medium",
 )
-ASSISTANT_MAX_OUTPUT_TOKENS = int(
-    os.getenv("ASSISTANT_MAX_OUTPUT_TOKENS", "260")
+GROQ_MAX_COMPLETION_TOKENS = int(
+    os.getenv("GROQ_MAX_COMPLETION_TOKENS", "420")
 )
-ASSISTANT_REASONING_EFFORT = os.getenv(
-    "ASSISTANT_REASONING_EFFORT",
-    "low",
-)
+
+# Keep enough recent turns to resolve follow-up questions such as
+# "and what happens if it fails?" without sending the full interview.
 INTERVIEW_CONTEXT_TURNS = int(
     os.getenv("INTERVIEW_CONTEXT_TURNS", "10")
 )
+
+# After the interviewer stops speaking, wait briefly before deciding whether
+# the turn contains a complete question.
 INTERVIEW_QUESTION_DEBOUNCE_SECONDS = float(
-    os.getenv("INTERVIEW_QUESTION_DEBOUNCE_SECONDS", "0.9")
+    os.getenv("INTERVIEW_QUESTION_DEBOUNCE_SECONDS", "1.2")
 )
 
 
@@ -116,10 +119,10 @@ def get_meeting_language() -> str:
 
 
 def get_language_mode() -> str:
-    """Compatibility helper for the existing Stage 2 code."""
+    """Compatibility helper for legacy assistant code."""
     return ASSISTANT_LANGUAGE if ASSISTANT_LANGUAGE in {"en", "es"} else "en"
 
 
 def get_ai_provider_name() -> str:
-    """Compatibility helper until the OpenAI Stage 2 provider is implemented."""
+    """Compatibility helper for legacy provider code."""
     return AI_PROVIDER
