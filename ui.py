@@ -734,6 +734,14 @@ class AssistantTab(QWidget):
             f"color: {MUTED}; font-size: 11px; background: transparent;"
         )
 
+        input_label = QLabel("Input: Auto")
+        input_label.setToolTip(
+            "Stage 2 detects English or Spanish independently for each turn."
+        )
+        input_label.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px; background: transparent;"
+        )
+
         language_label = QLabel("Answer:")
         language_label.setStyleSheet(
             f"color: {MUTED}; font-size: 11px; background: transparent;"
@@ -776,6 +784,8 @@ class AssistantTab(QWidget):
         header.addWidget(self.status_dot)
         header.addWidget(self.status_label)
         header.addStretch()
+        header.addWidget(input_label)
+        header.addSpacing(6)
         header.addWidget(language_label)
         header.addWidget(self.language_combo)
         header.addSpacing(6)
