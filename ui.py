@@ -189,6 +189,7 @@ class AssistantBridge(QObject):
     question_detected = pyqtSignal(str)
     question_ignored = pyqtSignal(str)
     answer_started = pyqtSignal(str)
+    answer_queued = pyqtSignal(str)
     answer_retrying = pyqtSignal()
     answer_delta = pyqtSignal(str)
     answer_completed = pyqtSignal(str)
@@ -793,6 +794,7 @@ class AssistantTab(QWidget):
         self._answer_buffer = ""
         self._pending_answer_buffer = ""
         self._answer_stream_started = False
+        self._current_answer_is_coding = False
         self._understood_question_text = ""
         self._pending_understood_question = ""
         self._pending_understood_topic = ""
@@ -1147,6 +1149,9 @@ class AssistantTab(QWidget):
         self.bridge.answer_started.connect(
             self._on_answer_started
         )
+        self.bridge.answer_queued.connect(
+            self._on_answer_queued
+        )
         self.bridge.answer_retrying.connect(
             self._on_answer_retrying
         )
@@ -1439,6 +1444,10 @@ class AssistantTab(QWidget):
                 lambda text:
                 self.bridge.answer_started.emit(text)
             ),
+            "on_answer_queued": (
+                lambda text:
+                self.bridge.answer_queued.emit(text)
+            ),
             "on_answer_retrying": (
                 lambda:
                 self.bridge.answer_retrying.emit()
@@ -1509,6 +1518,8 @@ class AssistantTab(QWidget):
         self._answer_buffer = ""
         self._pending_answer_buffer = ""
         self._answer_stream_started = False
+        self._current_answer_is_coding = False
+        self._reset_answer_panel_layout()
         self._understood_question_text = ""
         self._pending_understood_question = ""
         self._pending_understood_topic = ""
@@ -1706,6 +1717,87 @@ class AssistantTab(QWidget):
             "Waiting for the question to finish..."
         )
 
+    def _reset_answer_panel_layout(self) -> None:
+        self.transcript_view.setMinimumHeight(155)
+        self.transcript_view.setMaximumHeight(16777215)
+        self.answer_view.setMinimumHeight(135)
+        self.answer_view.setMaximumHeight(16777215)
+
+    def _prepare_coding_layout(self) -> None:
+        # Give code priority over transcript history while preserving both.
+        self.transcript_view.setMinimumHeight(105)
+        self.transcript_view.setMaximumHeight(165)
+        self.answer_view.setMinimumHeight(210)
+
+    def _fit_coding_answer_to_content(self) -> None:
+        if not self._current_answer_is_coding:
+            self._reset_answer_panel_layout()
+            return
+
+        self._prepare_coding_layout()
+
+        document = self.answer_view.document()
+        document.adjustSize()
+        content_height = int(document.size().height()) + 34
+
+        window = self.window()
+        screen = QApplication.screenAt(
+            window.frameGeometry().center()
+        )
+        if screen is None:
+            screen = window.screen()
+
+        if screen is not None:
+            available = screen.availableGeometry()
+            max_answer_height = max(
+                260,
+                min(560, int(available.height() * 0.58)),
+            )
+            max_window_height = max(
+                520,
+                available.height() - 24,
+            )
+        else:
+            available = None
+            max_answer_height = 520
+            max_window_height = 900
+
+        target_height = max(
+            210,
+            min(content_height, max_answer_height),
+        )
+
+        current_answer_height = self.answer_view.height()
+        self.answer_view.setMinimumHeight(target_height)
+        self.answer_view.setMaximumHeight(target_height)
+
+        grow_by = max(
+            0,
+            target_height - current_answer_height,
+        )
+        if grow_by:
+            new_height = min(
+                max_window_height,
+                window.height() + grow_by,
+            )
+            window.resize(window.width(), new_height)
+
+        if available is not None:
+            frame = window.frameGeometry()
+            if frame.bottom() > available.bottom():
+                new_y = max(
+                    available.top(),
+                    available.bottom() - window.height() + 1,
+                )
+                window.move(window.x(), new_y)
+
+    def _on_answer_queued(self, _text: str) -> None:
+        # Keep the current answer visible while the newest question waits for
+        # the active stream to finish.
+        self.activity_label.setText(
+            "Next question queued · finishing current answer..."
+        )
+
     def _on_question_detected(self, text: str) -> None:
         question = (
             self._pending_understood_question
@@ -1728,6 +1820,12 @@ class AssistantTab(QWidget):
         self.copy_question_button.setEnabled(bool(question))
 
         is_coding = topic.startswith("Coding")
+        self._current_answer_is_coding = is_coding
+        if is_coding:
+            self._prepare_coding_layout()
+        else:
+            self._reset_answer_panel_layout()
+
         self._pending_understood_question = ""
         self._pending_understood_topic = ""
         self._pending_understood_language = ""
@@ -1794,6 +1892,10 @@ class AssistantTab(QWidget):
             self.regenerate_button.setEnabled(True)
             self.copy_answer_button.setEnabled(True)
             self.activity_label.setText("Answer ready")
+            QTimer.singleShot(
+                0,
+                self._fit_coding_answer_to_content,
+            )
         else:
             # No content arrived. Preserve the previous confirmed answer.
             self.answer_state.setText(
