@@ -15,6 +15,7 @@ from typing import Callable
 from config import (
     ASSISTANT_RESPONSE_SCOPE,
     GROQ_STT_MODEL,
+    INTERVIEW_CODE_LANGUAGE,
     INTERVIEW_CONTEXT_TURNS,
     INTERVIEW_MAX_UTTERANCE_SECONDS,
     INTERVIEW_QUESTION_DEBOUNCE_SECONDS,
@@ -26,6 +27,7 @@ from config import (
     MIC_DEVICE_INDEX,
 )
 from interview_assistant import (
+    CodingContext,
     ConversationTurn,
     GroqInterviewAssistant,
 )
@@ -68,6 +70,9 @@ class InterviewController:
         self._last_turn_speaker = ""
         self._last_question = ""
         self._last_answer = ""
+        self._coding_context = CodingContext(
+            language=INTERVIEW_CODE_LANGUAGE
+        )
         self._topic_memory = ""
         self._deferred_response_text = ""
         self._deferred_response_speaker = ""
@@ -91,6 +96,9 @@ class InterviewController:
         self._last_turn_speaker = ""
         self._last_question = ""
         self._last_answer = ""
+        self._coding_context = CodingContext(
+            language=INTERVIEW_CODE_LANGUAGE
+        )
         self._topic_memory = ""
         self._deferred_response_text = ""
         self._deferred_response_speaker = ""
@@ -462,6 +470,67 @@ class InterviewController:
         )
         thread.start()
 
+    def _update_coding_context(
+        self,
+        analysis,
+        reconstructed: str,
+    ) -> CodingContext:
+        current = self._coding_context
+
+        if analysis.interview_type != "coding":
+            return current
+
+        is_new_problem = (
+            analysis.coding_new_problem
+            or (
+                not current.problem
+                and bool(
+                    analysis.coding_problem
+                    or reconstructed
+                )
+            )
+        )
+
+        problem = (
+            analysis.coding_problem.strip()
+            or (
+                reconstructed.strip()
+                if is_new_problem
+                else current.problem
+            )
+        )
+
+        if is_new_problem:
+            constraints = analysis.coding_constraints
+            last_solution = ""
+        else:
+            constraints = tuple(
+                dict.fromkeys(
+                    (
+                        *current.constraints,
+                        *analysis.coding_constraints,
+                    )
+                )
+            )
+            last_solution = current.last_solution
+
+        code_language = current.language or INTERVIEW_CODE_LANGUAGE
+        if analysis.coding_language != "unknown":
+            code_language = analysis.coding_language
+
+        request = analysis.coding_request
+        if request == "none":
+            request = current.request
+
+        self._coding_context = CodingContext(
+            problem=problem,
+            request=request,
+            constraints=constraints,
+            language=code_language,
+            last_solution=last_solution,
+        )
+        return self._coding_context
+
     def _answer_worker(
         self,
         question: str,
@@ -479,6 +548,7 @@ class InterviewController:
                 raw_turn=question,
                 recent_turns=recent_turns,
                 topic_memory=self._topic_memory,
+                coding_context=self._coding_context,
             )
 
             if analysis.topic or analysis.terms:
@@ -497,12 +567,37 @@ class InterviewController:
                 else question.strip()
             )
 
+            coding_context = self._update_coding_context(
+                analysis,
+                reconstructed,
+            )
+
+            display_topic = analysis.topic
+            if analysis.interview_type == "coding":
+                display_topic = (
+                    f"Coding · {analysis.topic}"
+                    if analysis.topic
+                    else "Coding"
+                )
+            elif analysis.interview_type == "behavioral":
+                display_topic = (
+                    f"Behavioral · {analysis.topic}"
+                    if analysis.topic
+                    else "Behavioral"
+                )
+
             self._emit(
                 "on_turn_understood",
                 reconstructed,
-                analysis.topic,
+                display_topic,
                 analysis.language,
             )
+
+            # Behavioral assistance is intentionally outside Stage 2 scope,
+            # even when the user presses the manual fallback button.
+            if analysis.interview_type == "behavioral":
+                self._emit("on_question_ignored", reconstructed)
+                return
 
             if not force:
                 if analysis.action == "WAIT":
@@ -537,6 +632,12 @@ class InterviewController:
                     language=language,
                     on_delta=on_delta,
                     topic_memory=self._topic_memory,
+                    interview_type=analysis.interview_type,
+                    coding_context=(
+                        coding_context
+                        if analysis.interview_type == "coding"
+                        else None
+                    ),
                 )
 
                 generated_answer = (
@@ -555,6 +656,15 @@ class InterviewController:
 
             if generated_answer:
                 self._last_answer = generated_answer
+
+                if analysis.interview_type == "coding":
+                    self._coding_context = CodingContext(
+                        problem=coding_context.problem,
+                        request=coding_context.request,
+                        constraints=coding_context.constraints,
+                        language=coding_context.language,
+                        last_solution=generated_answer,
+                    )
 
             self._emit(
                 "on_answer_completed",
