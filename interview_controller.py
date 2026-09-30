@@ -29,6 +29,7 @@ from interview_assistant import (
     ConversationTurn,
     GroqInterviewAssistant,
 )
+from groq_health import describe_groq_error
 from vad_detector import ListenerController
 
 
@@ -98,6 +99,7 @@ class InterviewController:
             "on_status": self._on_listener_status,
             "on_subtitle_partial": self._on_partial,
             "on_subtitle": self._on_final,
+            "on_transcription_error": self._on_transcription_error,
         }
 
         transcription_language = (
@@ -217,6 +219,21 @@ class InterviewController:
 
     def _on_listener_status(self, text: str) -> None:
         self._emit("on_status", text)
+
+    def _on_transcription_error(
+        self,
+        source: str,
+        exc: Exception,
+    ) -> None:
+        if INTERVIEW_STT_PROVIDER == "groq":
+            message = describe_groq_error(
+                exc,
+                f"Whisper {GROQ_STT_MODEL}",
+            )
+        else:
+            message = f"Transcription {source}: {exc}"
+
+        self._emit("on_service_error", message)
 
     def _on_partial(
         self,
@@ -544,7 +561,13 @@ class InterviewController:
                 generated_answer,
             )
         except Exception as exc:
-            self._emit("on_assistant_error", str(exc))
+            self._emit(
+                "on_assistant_error",
+                describe_groq_error(
+                    exc,
+                    "GPT " + str(getattr(self.assistant, "model", "Groq")),
+                ),
+            )
         finally:
             self._answer_lock.release()
 
