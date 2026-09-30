@@ -107,10 +107,13 @@ INTERVIEW_WHISPER_INITIAL_PROMPT = os.getenv(
         "Software engineering technical interview in English or Spanish. "
         "Technical vocabulary may include Java, JVM, JPA, Spring Boot, "
         "dependency injection, JWT, OAuth, OAuth2, OIDC, authentication, "
-        "authorization, Kafka, microservices, REST APIs, GraphQL, SQL, "
-        "NoSQL, MongoDB, Redis, Azure, AWS, Docker, Kubernetes, CI/CD, "
-        "SOLID, design patterns, heap, stack, garbage collection, "
-        "concurrency, threads, testing and system design."
+        "authorization, HTTP methods GET, POST, PUT, PATCH, DELETE, "
+        "Spring MVC, RestController, GetMapping, PostMapping, PutMapping, "
+        "PatchMapping, DeleteMapping, request mapping, endpoint, status code, "
+        "Kafka, microservices, REST APIs, GraphQL, SQL, NoSQL, MongoDB, "
+        "Redis, Azure, AWS, Docker, Kubernetes, CI/CD, SOLID, design "
+        "patterns, heap, stack, garbage collection, concurrency, threads, "
+        "testing and system design."
     ),
 )
 
