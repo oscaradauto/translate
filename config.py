@@ -90,9 +90,13 @@ WHISPER_INITIAL_PROMPT = os.getenv(
 ASSISTANT_LANGUAGE = os.getenv("ASSISTANT_LANGUAGE", "en")
 AI_PROVIDER = os.getenv("AI_PROVIDER", "groq")
 
-# Stage 2 uses a multilingual Faster-Whisper model. "auto" means language is
-# detected independently for every utterance, so English and Spanish can be
-# mixed during the same interview.
+# Stage 2 prioritizes transcription quality over local-only execution.
+# Groq Whisper Large V3 handles English/Spanish input; the local multilingual
+# Faster-Whisper model remains available as an offline fallback.
+INTERVIEW_STT_PROVIDER = os.getenv(
+    "INTERVIEW_STT_PROVIDER",
+    "groq",
+).strip().lower()
 INTERVIEW_WHISPER_MODEL = os.getenv(
     "INTERVIEW_WHISPER_MODEL",
     "small",
@@ -101,20 +105,33 @@ INTERVIEW_TRANSCRIPTION_LANGUAGE = os.getenv(
     "INTERVIEW_TRANSCRIPTION_LANGUAGE",
     "auto",
 ).strip().lower()
+GROQ_STT_MODEL = os.getenv(
+    "GROQ_STT_MODEL",
+    "whisper-large-v3",
+)
+GROQ_STT_PROMPT = os.getenv(
+    "GROQ_STT_PROMPT",
+    (
+        "Java, JVM, JPA, Spring Boot, dependency injection, JWT, OAuth, "
+        "OAuth2, OIDC, authentication, authorization, HTTP, REST, GET, "
+        "POST, PUT, PATCH, DELETE, Spring MVC, RestController, GetMapping, "
+        "PostMapping, PutMapping, PatchMapping, DeleteMapping, Kafka, "
+        "microservices, GraphQL, SQL, NoSQL, MongoDB, Redis, Azure, AWS, "
+        "Docker, Kubernetes, CI/CD, SOLID, heap, stack, garbage collection."
+    ),
+)
 INTERVIEW_WHISPER_INITIAL_PROMPT = os.getenv(
     "INTERVIEW_WHISPER_INITIAL_PROMPT",
-    (
-        "Software engineering technical interview in English or Spanish. "
-        "Technical vocabulary may include Java, JVM, JPA, Spring Boot, "
-        "dependency injection, JWT, OAuth, OAuth2, OIDC, authentication, "
-        "authorization, HTTP methods GET, POST, PUT, PATCH, DELETE, "
-        "Spring MVC, RestController, GetMapping, PostMapping, PutMapping, "
-        "PatchMapping, DeleteMapping, request mapping, endpoint, status code, "
-        "Kafka, microservices, REST APIs, GraphQL, SQL, NoSQL, MongoDB, "
-        "Redis, Azure, AWS, Docker, Kubernetes, CI/CD, SOLID, design "
-        "patterns, heap, stack, garbage collection, concurrency, threads, "
-        "testing and system design."
-    ),
+    GROQ_STT_PROMPT,
+)
+
+# Interview questions should not be split using the aggressive 8-second
+# subtitle limit. Finalize primarily on a natural pause.
+INTERVIEW_SPEECH_END_MS = int(
+    os.getenv("INTERVIEW_SPEECH_END_MS", "900")
+)
+INTERVIEW_MAX_UTTERANCE_SECONDS = float(
+    os.getenv("INTERVIEW_MAX_UTTERANCE_SECONDS", "30")
 )
 
 # Groq is used during development for technical reasoning. Transcription stays
