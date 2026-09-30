@@ -7,13 +7,18 @@ considered complete.
 
 from __future__ import annotations
 
+import re
 import threading
-from collections import deque
+from collections import Counter, deque
 from typing import Callable
 
 from config import (
+    GROQ_STT_MODEL,
     INTERVIEW_CONTEXT_TURNS,
+    INTERVIEW_MAX_UTTERANCE_SECONDS,
     INTERVIEW_QUESTION_DEBOUNCE_SECONDS,
+    INTERVIEW_SPEECH_END_MS,
+    INTERVIEW_STT_PROVIDER,
     INTERVIEW_TRANSCRIPTION_LANGUAGE,
     INTERVIEW_WHISPER_INITIAL_PROMPT,
     INTERVIEW_WHISPER_MODEL,
@@ -90,12 +95,35 @@ class InterviewController:
             else INTERVIEW_TRANSCRIPTION_LANGUAGE
         )
 
+        transcriber_factory = None
+        partials_enabled = True
+        engine_label = "Faster-Whisper local"
+
+        if INTERVIEW_STT_PROVIDER == "groq":
+            from groq_transcriber import GroqSpeechTranscriber
+
+            def transcriber_factory(**kwargs):
+                return GroqSpeechTranscriber(
+                    language=transcription_language,
+                    **kwargs,
+                )
+
+            # For Stage 2 we prefer a clean final question after a natural
+            # pause instead of noisy rolling partial text.
+            partials_enabled = False
+            engine_label = f"Groq {GROQ_STT_MODEL}"
+
         self.listener = ListenerController(
             callbacks,
             mic_device=self.mic_device,
             whisper_model=INTERVIEW_WHISPER_MODEL,
             transcription_language=transcription_language,
             initial_prompt=INTERVIEW_WHISPER_INITIAL_PROMPT,
+            transcriber_factory=transcriber_factory,
+            speech_end_ms=INTERVIEW_SPEECH_END_MS,
+            max_utterance_seconds=INTERVIEW_MAX_UTTERANCE_SECONDS,
+            partials_enabled=partials_enabled,
+            engine_label=engine_label,
         )
         self.listener.start()
 
@@ -202,6 +230,19 @@ class InterviewController:
             return
 
         speaker = "YOU" if source == "YOU" else "INTERVIEWER"
+
+        if self._is_low_quality_transcript(cleaned):
+            print(
+                f"[Stage2:{speaker}] Descarta transcripción ruidosa: "
+                f"{cleaned[:160]}"
+            )
+            self._emit(
+                "on_transcript_rejected",
+                speaker,
+                cleaned,
+            )
+            return
+
         self._last_turn_text = cleaned
         self._last_turn_speaker = speaker
 
@@ -217,6 +258,38 @@ class InterviewController:
 
         if speaker == "INTERVIEWER":
             self._queue_interviewer_text(cleaned)
+
+    @staticmethod
+    def _is_low_quality_transcript(text: str) -> bool:
+        """Reject obvious ASR loops before they pollute interview context."""
+        tokens = [
+            re.sub(r"[^a-z0-9áéíóúüñ]+", "", token.casefold())
+            for token in text.split()
+        ]
+        tokens = [token for token in tokens if token]
+
+        if len(tokens) < 8:
+            return False
+
+        counts = Counter(tokens)
+        dominant_ratio = counts.most_common(1)[0][1] / len(tokens)
+
+        longest_run = 1
+        current_run = 1
+        for previous, current in zip(tokens, tokens[1:]):
+            if current == previous:
+                current_run += 1
+                longest_run = max(longest_run, current_run)
+            else:
+                current_run = 1
+
+        unique_ratio = len(counts) / len(tokens)
+
+        return (
+            dominant_ratio >= 0.45
+            or longest_run >= 4
+            or (len(tokens) >= 14 and unique_ratio <= 0.25)
+        )
 
     def _new_question_timer(self) -> threading.Timer:
         timer = threading.Timer(
