@@ -108,6 +108,7 @@ class AssistantBridge(QObject):
     question_detected = pyqtSignal(str)
     question_ignored = pyqtSignal(str)
     answer_started = pyqtSignal(str)
+    answer_retrying = pyqtSignal()
     answer_delta = pyqtSignal(str)
     answer_completed = pyqtSignal(str)
     assistant_error = pyqtSignal(str)
@@ -1022,6 +1023,9 @@ class AssistantTab(QWidget):
         self.bridge.answer_started.connect(
             self._on_answer_started
         )
+        self.bridge.answer_retrying.connect(
+            self._on_answer_retrying
+        )
         self.bridge.answer_delta.connect(self._on_answer_delta)
         self.bridge.answer_completed.connect(
             self._on_answer_completed
@@ -1101,6 +1105,10 @@ class AssistantTab(QWidget):
             "on_answer_started": (
                 lambda text:
                 self.bridge.answer_started.emit(text)
+            ),
+            "on_answer_retrying": (
+                lambda:
+                self.bridge.answer_retrying.emit()
             ),
             "on_answer_delta": (
                 lambda text:
@@ -1396,8 +1404,21 @@ class AssistantTab(QWidget):
         self.regenerate_button.setEnabled(False)
         self.copy_answer_button.setEnabled(bool(self._answer_buffer))
 
+    def _on_answer_retrying(self) -> None:
+        self._pending_answer_buffer = ""
+        self._answer_stream_started = False
+        self.answer_state.setText("Retrying...")
+        self.activity_label.setText(
+            "Empty answer received · retrying once..."
+        )
+
     def _on_answer_delta(self, delta: str) -> None:
         if not delta:
+            return
+
+        # Ignore leading whitespace-only chunks so an empty first attempt
+        # cannot erase the previous confirmed answer.
+        if not self._answer_stream_started and not delta.strip():
             return
 
         if not self._answer_stream_started:
