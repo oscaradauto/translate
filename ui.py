@@ -859,6 +859,24 @@ class AssistantTab(QWidget):
             f"color: {MUTED}; font-size: 11px; background: transparent;"
         )
 
+        self.health_label = QLabel("🎤 —   🔊 —   Groq —")
+        self.health_label.setStyleSheet(
+            f"color: {MUTED_DARK}; font-size: 10px; background: transparent;"
+        )
+        self.health_label.setToolTip(
+            "Estado de micrófono, audio del sistema y servicios Groq."
+        )
+
+        self.latency_label = QLabel(
+            "STT —   Analyze —   Answer —"
+        )
+        self.latency_label.setStyleSheet(
+            f"color: {MUTED_DARK}; font-size: 10px; background: transparent;"
+        )
+        self.latency_label.setToolTip(
+            "Latencia de la última transcripción, análisis y respuesta."
+        )
+
         capture_mode_label = QLabel("Capture:")
         capture_mode_label.setStyleSheet(
             f"color: {MUTED}; font-size: 11px; background: transparent;"
@@ -985,6 +1003,10 @@ class AssistantTab(QWidget):
         header.addSpacing(4)
         header.addWidget(self.status_dot)
         header.addWidget(self.status_label)
+        header.addSpacing(10)
+        header.addWidget(self.health_label)
+        header.addSpacing(10)
+        header.addWidget(self.latency_label)
         header.addStretch()
         header.addWidget(self.interview_button)
 
@@ -1136,10 +1158,17 @@ class AssistantTab(QWidget):
         self.copy_answer_button.setEnabled(False)
         self.copy_answer_button.clicked.connect(self._copy_answer)
 
+        self.copy_code_button = QPushButton("📋 Copiar código")
+        self.copy_code_button.setStyleSheet(_button_style())
+        self.copy_code_button.setEnabled(False)
+        self.copy_code_button.setVisible(False)
+        self.copy_code_button.clicked.connect(self._copy_code)
+
         actions.addWidget(self.answer_last_button)
         actions.addWidget(self.regenerate_button)
         actions.addWidget(self.copy_question_button)
         actions.addWidget(self.copy_answer_button)
+        actions.addWidget(self.copy_code_button)
         actions.addStretch()
 
         root.addLayout(actions)
@@ -1188,6 +1217,9 @@ class AssistantTab(QWidget):
         )
         self.bridge.service_error.connect(
             self._on_service_error
+        )
+        self.bridge.latency_updated.connect(
+            self._on_latency_updated
         )
         self.bridge.groq_check_completed.connect(
             self._on_groq_check_completed
