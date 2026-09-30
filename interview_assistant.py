@@ -1,12 +1,14 @@
-"""Groq answer engine for Stage 2 technical interviews.
+"""Context-aware Groq engine for Stage 2 technical interviews.
 
-Transcription remains local with Faster-Whisper. Only text from the recent
-interview context is sent to Groq when a candidate interviewer turn is ready.
+Faster-Whisper provides a fast raw transcript. Groq then interprets that raw
+turn in the context of the ongoing interview before deciding whether to answer.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
@@ -27,9 +29,8 @@ Do not start with filler such as 'Great question', 'Sure', or 'Absolutely'.
 Prefer 2-4 short sentences for conceptual questions.
 For architecture or system-design questions, give the main approach, the key trade-off, and one practical detail.
 For coding questions, explain the approach first and keep code very small unless the interviewer explicitly asks for a full implementation.
-Use the recent conversation context to resolve follow-up questions and pronouns.
+Use the ongoing interview context to resolve follow-up questions and pronouns.
 Do not invent personal experience, employers, incidents, metrics, or projects.
-If the transcription contains a likely minor technical-term error, infer the most plausible software term from context without discussing the transcription error.
 Return only the answer the interviewee could say aloud."""
 
 SYSTEM_PROMPT_ES = """Eres un desarrollador senior ayudando durante una entrevista técnica en vivo.
@@ -38,19 +39,37 @@ No empieces con relleno como 'Buena pregunta', 'Claro' o 'Por supuesto'.
 Para preguntas conceptuales usa normalmente 2-4 frases cortas.
 Para arquitectura o system design da el enfoque principal, el trade-off clave y un detalle práctico.
 Para preguntas de código explica primero el enfoque y mantén el código muy corto salvo que el entrevistador pida una implementación completa.
-Usa el contexto reciente para resolver preguntas de seguimiento y pronombres.
+Usa el contexto continuo de la entrevista para resolver preguntas de seguimiento y pronombres.
 No inventes experiencia personal, empleadores, incidentes, métricas ni proyectos.
-Si la transcripción contiene un pequeño error probable en un término técnico, infiere el término de software más plausible por contexto sin hablar del error de transcripción.
 Devuelve únicamente la respuesta que el entrevistado podría decir en voz alta."""
 
-ROUTER_PROMPT = """Decide whether the latest interviewer turn requires a technical software-engineering answer.
-Return exactly ANSWER or IGNORE, with no punctuation or explanation.
+CONTEXTUALIZER_PROMPT = """You are the context and turn-understanding layer of a live software-engineering interview assistant.
 
-ANSWER for questions or requests about programming, Java, Spring, APIs, microservices, databases, SQL, NoSQL, Kafka, cloud, DevOps, CI/CD, testing, security, concurrency, data structures, algorithms, debugging, architecture, system design, performance, coding, or concrete technical experience.
+The speech transcript can contain recognition mistakes, especially technical terms, acronyms, English spoken with an accent, or Spanish/English code-switching.
 
-IGNORE for greetings, thanks, scheduling, salary, availability, introductions, generic small talk, or purely behavioral/non-technical prompts such as 'tell me about yourself'.
+Your job is to understand the latest raw turn USING the recent conversation and the current topic memory.
 
-Use the recent interview context when the latest turn is a follow-up like 'why?', 'what about failures?', or 'and how would you scale it?'."""
+Return ONLY valid JSON with this exact shape:
+{
+  "action": "ANSWER" | "IGNORE" | "WAIT",
+  "question": "best reconstructed technical question, or empty string",
+  "topic": "short current technical topic, or empty string",
+  "language": "en" | "es" | "mixed" | "unknown",
+  "terms": ["important technical terms"]
+}
+
+Rules:
+- Preserve the speaker's intended meaning; do not invent a new question.
+- Correct obvious ASR mistakes only when phonetics plus context make the technical term reasonably clear.
+- Examples: "J W T" / "jay double u tee" -> JWT; "oh auth" -> OAuth; "spring butt" -> Spring Boot.
+- Use previous turns to resolve fragments such as "and why?", "what about failures?", "and the other one?", or pronouns.
+- ANSWER when the turn is a technical software-engineering question/request that can now be answered.
+- WAIT when the latest turn sounds incomplete and more speech is likely needed.
+- IGNORE for greetings, thanks, scheduling, salary, generic small talk, or non-technical conversation.
+- A technical question may be in English, Spanish, or mixed.
+- The reconstructed question should remain in the language in which the question was most likely asked.
+- If uncertain about a corrupted technical term, keep the raw wording rather than confidently inventing a replacement.
+"""
 
 
 @dataclass(frozen=True)
@@ -59,8 +78,17 @@ class ConversationTurn:
     text: str
 
 
+@dataclass(frozen=True)
+class TurnAnalysis:
+    action: str
+    question: str
+    topic: str
+    language: str
+    terms: tuple[str, ...]
+
+
 class GroqInterviewAssistant:
-    """Groq GPT-OSS wrapper with routing and streaming answers."""
+    """Groq GPT-OSS wrapper with contextual turn analysis and streaming answers."""
 
     def __init__(self) -> None:
         api_key = os.getenv("GROQ_API_KEY", "").strip()
@@ -84,36 +112,88 @@ class GroqInterviewAssistant:
                 else "You"
             )
             lines.append(f"{label}: {turn.text}")
-        return "\n".join(lines[-12:])
+        return "\n".join(lines[-24:])
 
-    def should_answer(
+    def analyze_turn(
         self,
-        question: str,
+        raw_turn: str,
         recent_turns: Iterable[ConversationTurn],
-    ) -> bool:
+        topic_memory: str = "",
+    ) -> TurnAnalysis:
+        """Interpret an imperfect transcript using the ongoing interview context."""
         context = self._context_text(recent_turns)
+
         completion = self.client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": ROUTER_PROMPT},
+                {"role": "system", "content": CONTEXTUALIZER_PROMPT},
                 {
                     "role": "user",
                     "content": (
-                        f"Recent interview conversation:\n{context}\n\n"
-                        f"Latest interviewer turn:\n{question}"
+                        f"Current topic memory:\n{topic_memory or '(none)'}\n\n"
+                        f"Recent interview conversation:\n{context or '(none)'}\n\n"
+                        f"Latest raw transcript:\n{raw_turn}"
                     ),
                 },
             ],
             reasoning_effort="low",
             include_reasoning=False,
-            max_completion_tokens=8,
+            max_completion_tokens=220,
             temperature=0.0,
         )
 
-        text = (
-            completion.choices[0].message.content or ""
-        ).strip().upper()
-        return text.startswith("ANSWER")
+        raw = (completion.choices[0].message.content or "").strip()
+        data = self._parse_analysis_json(raw)
+
+        action = str(data.get("action", "IGNORE")).upper()
+        if action not in {"ANSWER", "IGNORE", "WAIT"}:
+            action = "IGNORE"
+
+        question = " ".join(
+            str(data.get("question", "")).strip().split()
+        )
+        topic = " ".join(
+            str(data.get("topic", "")).strip().split()
+        )
+        language = str(data.get("language", "unknown")).lower()
+        if language not in {"en", "es", "mixed", "unknown"}:
+            language = "unknown"
+
+        raw_terms = data.get("terms", [])
+        if not isinstance(raw_terms, list):
+            raw_terms = []
+        terms = tuple(
+            str(term).strip()
+            for term in raw_terms[:12]
+            if str(term).strip()
+        )
+
+        if action == "ANSWER" and not question:
+            question = raw_turn.strip()
+
+        return TurnAnalysis(
+            action=action,
+            question=question,
+            topic=topic,
+            language=language,
+            terms=terms,
+        )
+
+    @staticmethod
+    def _parse_analysis_json(text: str) -> dict:
+        cleaned = text.strip()
+        try:
+            parsed = json.loads(cleaned)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+            if not match:
+                return {}
+            try:
+                parsed = json.loads(match.group(0))
+                return parsed if isinstance(parsed, dict) else {}
+            except json.JSONDecodeError:
+                return {}
 
     def stream_answer(
         self,
@@ -121,6 +201,7 @@ class GroqInterviewAssistant:
         recent_turns: Iterable[ConversationTurn],
         language: str,
         on_delta: DeltaCallback,
+        topic_memory: str = "",
     ) -> str:
         instructions = (
             SYSTEM_PROMPT_ES
@@ -136,19 +217,20 @@ class GroqInterviewAssistant:
                 {
                     "role": "user",
                     "content": (
+                        f"Current interview topic:\n{topic_memory or '(unknown)'}\n\n"
                         "Recent interview conversation:\n"
-                        f"{context}\n\n"
-                        "Latest interviewer question:\n"
+                        f"{context or '(none)'}\n\n"
+                        "Contextually reconstructed interviewer question:\n"
                         f"{question}\n\n"
-                        "Answer the latest question. Use the recent "
-                        "conversation only as context."
+                        "Answer that question. Use the recent conversation "
+                        "to resolve follow-ups, but do not repeat the transcript."
                     ),
                 },
             ],
             reasoning_effort=GROQ_REASONING_EFFORT,
             include_reasoning=False,
             max_completion_tokens=GROQ_MAX_COMPLETION_TOKENS,
-            temperature=0.25,
+            temperature=0.2,
             stream=True,
         )
 
