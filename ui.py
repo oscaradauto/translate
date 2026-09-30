@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QTabWidget,
@@ -112,6 +113,8 @@ class AssistantBridge(QObject):
     answer_delta = pyqtSignal(str)
     answer_completed = pyqtSignal(str)
     assistant_error = pyqtSignal(str)
+    service_error = pyqtSignal(str)
+    groq_check_completed = pyqtSignal(bool, str)
 
 
 class CaptionCard(QFrame):
@@ -867,6 +870,17 @@ class AssistantTab(QWidget):
             f"color: {MUTED}; font-size: 10px; background: transparent;"
         )
 
+        self.verify_groq_button = QPushButton(
+            "✓ Verificar Groq"
+        )
+        self.verify_groq_button.setStyleSheet(_button_style())
+        self.verify_groq_button.setToolTip(
+            "Prueba Whisper y GPT con llamadas mínimas antes de la entrevista."
+        )
+        self.verify_groq_button.clicked.connect(
+            self._verify_groq
+        )
+
         self.copy_conversation_button = QPushButton(
             "📋 Copiar conversación"
         )
@@ -878,6 +892,8 @@ class AssistantTab(QWidget):
 
         conversation_header.addWidget(conversation_title)
         conversation_header.addStretch()
+        conversation_header.addWidget(self.verify_groq_button)
+        conversation_header.addSpacing(6)
         conversation_header.addWidget(self.copy_conversation_button)
         conversation_header.addSpacing(6)
         conversation_header.addWidget(self.activity_label)
@@ -1033,6 +1049,12 @@ class AssistantTab(QWidget):
         self.bridge.assistant_error.connect(
             self._on_assistant_error
         )
+        self.bridge.service_error.connect(
+            self._on_service_error
+        )
+        self.bridge.groq_check_completed.connect(
+            self._on_groq_check_completed
+        )
 
     def _toggle_session(self) -> None:
         if self._starting or self._stopping:
@@ -1048,6 +1070,7 @@ class AssistantTab(QWidget):
         self._clear_session_ui()
 
         self.interview_button.setEnabled(False)
+        self.verify_groq_button.setEnabled(False)
         self.interview_button.setText("⏳ Cargando...")
         self._on_status_changed("Preparando audio...")
 
@@ -1121,6 +1144,10 @@ class AssistantTab(QWidget):
             "on_assistant_error": (
                 lambda text:
                 self.bridge.assistant_error.emit(text)
+            ),
+            "on_service_error": (
+                lambda text:
+                self.bridge.service_error.emit(text)
             ),
         }
 
@@ -1466,9 +1493,99 @@ class AssistantTab(QWidget):
         if not self._answer_buffer:
             self.answer_view.setPlainText(f"Error: {text}")
 
+        self._on_service_error(text)
+
+    def _verify_groq(self) -> None:
+        if (
+            self.controller is not None
+            or self._starting
+            or self._stopping
+        ):
+            return
+
+        self.verify_groq_button.setEnabled(False)
+        self.verify_groq_button.setText("⏳ Verificando...")
+        self.interview_button.setEnabled(False)
         self.activity_label.setText(
-            f"Assistant error: {text}"
+            "Checking Whisper and GPT..."
         )
+
+        def worker() -> None:
+            try:
+                from groq_health import verify_groq_services
+
+                result = verify_groq_services()
+                self.bridge.groq_check_completed.emit(
+                    result.ready,
+                    result.message,
+                )
+            except Exception as exc:
+                self.bridge.groq_check_completed.emit(
+                    False,
+                    f"Groq preflight error: {exc}",
+                )
+
+        threading.Thread(
+            target=worker,
+            name="groq-preflight",
+            daemon=True,
+        ).start()
+
+    def _on_groq_check_completed(
+        self,
+        ready: bool,
+        message: str,
+    ) -> None:
+        can_start = (
+            self.controller is None
+            and not self._starting
+            and not self._stopping
+        )
+        self.verify_groq_button.setEnabled(can_start)
+        self.interview_button.setEnabled(can_start)
+        self.verify_groq_button.setToolTip(message)
+
+        if ready:
+            self.verify_groq_button.setText("✓ Groq listo")
+            self.activity_label.setText(
+                "Groq preflight passed"
+            )
+            QMessageBox.information(
+                self,
+                "Verificar Groq",
+                message,
+            )
+        else:
+            self.verify_groq_button.setText("⚠ Verificar Groq")
+            self.activity_label.setText(
+                "Groq preflight failed"
+            )
+            QMessageBox.warning(
+                self,
+                "Verificar Groq",
+                message,
+            )
+
+    def _on_service_error(self, text: str) -> None:
+        is_rate_limit = "429" in text
+        self.status_dot.setStyleSheet(
+            f"color: {RED}; font-size: 9px; background: transparent;"
+        )
+        self.status_label.setText(
+            "Groq 429"
+            if is_rate_limit
+            else "Groq error"
+        )
+        self.activity_label.setText(
+            "Groq rate limit reached"
+            if is_rate_limit
+            else "Groq service error"
+        )
+        self.activity_label.setToolTip(text)
+        self.verify_groq_button.setText(
+            "⚠ Verificar Groq"
+        )
+        self.verify_groq_button.setToolTip(text)
 
     def _answer_last(self) -> None:
         if self.controller is not None:
@@ -1574,6 +1691,7 @@ class AssistantTab(QWidget):
             self.status_label.setText("Ready")
             self.interview_button.setText("▶  Iniciar entrevista")
             self.interview_button.setEnabled(True)
+            self.verify_groq_button.setEnabled(True)
             self.activity_label.setText("Stopped")
             return
 
@@ -1587,6 +1705,7 @@ class AssistantTab(QWidget):
             self.status_label.setText("Error")
             self.interview_button.setText("▶  Iniciar entrevista")
             self.interview_button.setEnabled(True)
+            self.verify_groq_button.setEnabled(True)
             self.answer_view.setPlainText(text)
             return
 
