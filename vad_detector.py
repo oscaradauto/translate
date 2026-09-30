@@ -576,12 +576,22 @@ class ListenerController:
         whisper_model: str = WHISPER_MODEL,
         transcription_language: str | None = "en",
         initial_prompt: str | None = WHISPER_INITIAL_PROMPT,
+        transcriber_factory=None,
+        speech_end_ms: int = SUBTITLE_SPEECH_END_MS,
+        max_utterance_seconds: float = SUBTITLE_MAX_UTTERANCE_SECONDS,
+        partials_enabled: bool = True,
+        engine_label: str = "Faster-Whisper local",
     ):
         self.callbacks = callbacks
         self.mic_device = mic_device
         self.whisper_model = whisper_model
         self.transcription_language = transcription_language
         self.initial_prompt = initial_prompt
+        self.transcriber_factory = transcriber_factory
+        self.speech_end_ms = speech_end_ms
+        self.max_utterance_seconds = max_utterance_seconds
+        self.partials_enabled = partials_enabled
+        self.engine_label = engine_label
 
         self.running = False
         self.mic_streamer: LocalMicStreamer | None = None
@@ -645,24 +655,36 @@ class ListenerController:
         self._emit("on_status", "Cargando modelo local...")
 
         try:
-            self.transcriber = LocalWhisperTranscriber(
-                on_partial=self._on_partial,
-                on_final=self._on_final,
-                on_status=lambda text: self._emit(
-                    "on_status",
-                    text,
-                ),
-                on_error=self._on_transcription_error,
-                model_name=self.whisper_model,
-                language=self.transcription_language,
-                initial_prompt=self.initial_prompt,
-            )
+            if self.transcriber_factory is not None:
+                self.transcriber = self.transcriber_factory(
+                    on_partial=self._on_partial,
+                    on_final=self._on_final,
+                    on_status=lambda text: self._emit(
+                        "on_status",
+                        text,
+                    ),
+                    on_error=self._on_transcription_error,
+                )
+            else:
+                self.transcriber = LocalWhisperTranscriber(
+                    on_partial=self._on_partial,
+                    on_final=self._on_final,
+                    on_status=lambda text: self._emit(
+                        "on_status",
+                        text,
+                    ),
+                    on_error=self._on_transcription_error,
+                    model_name=self.whisper_model,
+                    language=self.transcription_language,
+                    initial_prompt=self.initial_prompt,
+                )
+
             self.transcriber.start()
         except Exception as exc:
             self.running = False
             self._emit(
                 "on_status",
-                f"Error cargando Faster-Whisper: {exc}",
+                f"Error cargando transcripción: {exc}",
             )
             return
 
@@ -675,6 +697,9 @@ class ListenerController:
                 self._next_segment_id,
                 self._local_speech_gate,
                 self._on_capture_error,
+                speech_end_ms=self.speech_end_ms,
+                max_utterance_seconds=self.max_utterance_seconds,
+                partials_enabled=self.partials_enabled,
             )
             self.mic_streamer.start()
             started_sources.append("YOU")
@@ -688,6 +713,9 @@ class ListenerController:
                 self._next_segment_id,
                 self._local_speech_gate,
                 self._on_capture_error,
+                speech_end_ms=self.speech_end_ms,
+                max_utterance_seconds=self.max_utterance_seconds,
+                partials_enabled=self.partials_enabled,
             )
             self.loopback_streamer.start()
             started_sources.append("MEETING")
@@ -711,7 +739,7 @@ class ListenerController:
         elif started_sources == ["MEETING"]:
             status = "Escuchando (solo audio de reunión)"
         else:
-            status = "Escuchando · Faster-Whisper local"
+            status = f"Escuchando · {self.engine_label}"
 
         self._emit("on_status", status)
 
