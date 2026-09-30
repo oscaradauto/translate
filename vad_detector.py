@@ -133,10 +133,16 @@ class _SpeechSegmenter:
         next_segment_id: Callable[[], int],
         speech_start_ms: int,
         min_voiced_ms: int,
+        speech_end_ms: int = SUBTITLE_SPEECH_END_MS,
+        max_utterance_seconds: float = SUBTITLE_MAX_UTTERANCE_SECONDS,
+        partials_enabled: bool = True,
     ) -> None:
         self.source = source
         self.transcriber = transcriber
         self.next_segment_id = next_segment_id
+        self._speech_end_ms = speech_end_ms
+        self._max_utterance_seconds = max_utterance_seconds
+        self._partials_enabled = partials_enabled
         self._speech_start_frames = max(
             1,
             int(np.ceil(speech_start_ms / VAD_FRAME_MS)),
@@ -194,7 +200,8 @@ class _SpeechSegmenter:
         )
 
         if (
-            duration_seconds >= SUBTITLE_PARTIAL_MIN_SECONDS
+            self._partials_enabled
+            and duration_seconds >= SUBTITLE_PARTIAL_MIN_SECONDS
             and self._voiced_frames >= self._min_voiced_frames
             and now - self._last_partial_time
             >= SUBTITLE_PARTIAL_INTERVAL_SECONDS
@@ -203,9 +210,9 @@ class _SpeechSegmenter:
             self._submit_partial()
 
         silence_ms = (now - self._last_speech_time) * 1000
-        if silence_ms >= SUBTITLE_SPEECH_END_MS:
+        if silence_ms >= self._speech_end_ms:
             self._finalize()
-        elif duration_seconds >= SUBTITLE_MAX_UTTERANCE_SECONDS:
+        elif duration_seconds >= self._max_utterance_seconds:
             # Long monologues are split into readable caption blocks.
             self._finalize()
 
