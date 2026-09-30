@@ -502,24 +502,46 @@ class InterviewController:
             self._emit("on_question_detected", reconstructed)
             self._emit("on_answer_started", reconstructed)
 
-            chunks: list[str] = []
+            generated_answer = ""
 
-            def on_delta(delta: str) -> None:
-                chunks.append(delta)
-                self._emit("on_answer_delta", delta)
+            # A rare Groq stream can finish successfully without returning
+            # usable content. Retry exactly once with the same question,
+            # context and output language before giving up.
+            for attempt in range(2):
+                chunks: list[str] = []
 
-            answer = assistant.stream_answer(
-                question=reconstructed,
-                recent_turns=recent_turns,
-                language=language,
-                on_delta=on_delta,
-                topic_memory=self._topic_memory,
-            )
+                def on_delta(delta: str) -> None:
+                    chunks.append(delta)
+                    self._emit("on_answer_delta", delta)
 
-            self._last_answer = answer or "".join(chunks).strip()
+                answer = assistant.stream_answer(
+                    question=reconstructed,
+                    recent_turns=recent_turns,
+                    language=language,
+                    on_delta=on_delta,
+                    topic_memory=self._topic_memory,
+                )
+
+                generated_answer = (
+                    answer or "".join(chunks)
+                ).strip()
+
+                if generated_answer:
+                    break
+
+                if attempt == 0 and self.running:
+                    print(
+                        "[Stage2] Groq devolvió una respuesta vacía; "
+                        "reintentando una vez."
+                    )
+                    self._emit("on_answer_retrying")
+
+            if generated_answer:
+                self._last_answer = generated_answer
+
             self._emit(
                 "on_answer_completed",
-                self._last_answer,
+                generated_answer,
             )
         except Exception as exc:
             self._emit("on_assistant_error", str(exc))
