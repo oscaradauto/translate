@@ -126,7 +126,7 @@ GROQ_MAX_COMPLETION_TOKENS = int(
 # Keep enough recent turns to resolve follow-up questions such as
 # "and what happens if it fails?" without sending the full interview.
 INTERVIEW_CONTEXT_TURNS = int(
-    os.getenv("INTERVIEW_CONTEXT_TURNS", "10")
+    os.getenv("INTERVIEW_CONTEXT_TURNS", "24")
 )
 
 # After the interviewer stops speaking, wait briefly before deciding whether
