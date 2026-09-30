@@ -130,7 +130,7 @@ Rules:
 - A conceptual question about Java, Streams, Spring, REST, etc. is interview_type="technical" unless it is tied to an active coding problem.
 - Set coding.new_problem=true only when the interviewer introduces a genuinely new coding exercise. Follow-ups on the current problem must use false.
 - For a coding follow-up, coding.problem should contain the resolved active problem when it is clear from context.
-- Put only explicit new or active constraints in coding.constraints, e.g. "without extra memory", "must use streams", "input may be null".
+- coding.constraints must represent the FULL SET of constraints currently active after applying the latest follow-up, e.g. "without extra memory", "must use streams", "input may be null". If a newer instruction replaces an older constraint, omit the obsolete constraint.
 - Behavioral questions about stakeholders, coworkers, conflict, leadership, teamwork, strengths, weaknesses, or similar personal-work stories must be interview_type="behavioral" and action="IGNORE".
 - Greetings, thanks, scheduling, salary, company descriptions, and generic small talk must be interview_type="other" and action="IGNORE".
 - ANSWER technical and coding questions/requests that can now be answered.
