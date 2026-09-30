@@ -134,8 +134,8 @@ INTERVIEW_MAX_UTTERANCE_SECONDS = float(
     os.getenv("INTERVIEW_MAX_UTTERANCE_SECONDS", "30")
 )
 
-# Groq is used during development for technical reasoning. Transcription stays
-# local with Faster-Whisper, so Groq only receives text/context.
+# Groq is used during development for both high-accuracy Stage 2 speech
+# recognition and technical reasoning. Stage 1 remains fully local.
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_REASONING_EFFORT = os.getenv(
     "GROQ_REASONING_EFFORT",
