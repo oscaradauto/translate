@@ -90,6 +90,28 @@ WHISPER_INITIAL_PROMPT = os.getenv(
 ASSISTANT_LANGUAGE = os.getenv("ASSISTANT_LANGUAGE", "en")
 AI_PROVIDER = os.getenv("AI_PROVIDER", "groq")
 
+# Stage 2 uses a multilingual Faster-Whisper model. "auto" means language is
+# detected independently for every utterance, so English and Spanish can be
+# mixed during the same interview.
+INTERVIEW_WHISPER_MODEL = os.getenv(
+    "INTERVIEW_WHISPER_MODEL",
+    "base",
+)
+INTERVIEW_TRANSCRIPTION_LANGUAGE = os.getenv(
+    "INTERVIEW_TRANSCRIPTION_LANGUAGE",
+    "auto",
+).strip().lower()
+INTERVIEW_WHISPER_INITIAL_PROMPT = os.getenv(
+    "INTERVIEW_WHISPER_INITIAL_PROMPT",
+    (
+        "Software engineering technical interview in English or Spanish. "
+        "Technical vocabulary may include Java, Spring Boot, dependency "
+        "injection, Kafka, microservices, REST APIs, GraphQL, SQL, NoSQL, "
+        "MongoDB, Azure, AWS, Docker, Kubernetes, CI/CD, SOLID, design "
+        "patterns, concurrency, threads, testing and system design."
+    ),
+)
+
 # Groq is used during development for technical reasoning. Transcription stays
 # local with Faster-Whisper, so Groq only receives text/context.
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
