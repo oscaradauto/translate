@@ -48,6 +48,86 @@ WARNING = "#f0ad4e"
 RED = "#d9534f"
 
 
+WDA_NONE = 0x00000000
+WDA_EXCLUDEFROMCAPTURE = 0x00000011
+
+
+def _set_window_capture_exclusion(
+    window: QWidget,
+    enabled: bool,
+) -> tuple[bool, str]:
+    """Exclude the top-level app window from compatible Windows capture."""
+    if sys.platform != "win32":
+        return (
+            False,
+            "La protección de captura solo está disponible en Windows.",
+        )
+
+    try:
+        import ctypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+        user32.SetWindowDisplayAffinity.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint,
+        ]
+        user32.SetWindowDisplayAffinity.restype = ctypes.c_bool
+
+        user32.GetWindowDisplayAffinity.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_uint),
+        ]
+        user32.GetWindowDisplayAffinity.restype = ctypes.c_bool
+
+        hwnd = ctypes.c_void_p(int(window.winId()))
+        affinity = (
+            WDA_EXCLUDEFROMCAPTURE
+            if enabled
+            else WDA_NONE
+        )
+
+        ctypes.set_last_error(0)
+        if not user32.SetWindowDisplayAffinity(hwnd, affinity):
+            error_code = ctypes.get_last_error()
+            return (
+                False,
+                "Windows no pudo cambiar la protección de captura "
+                f"(WinError {error_code}).",
+            )
+
+        current = ctypes.c_uint()
+        ctypes.set_last_error(0)
+        if not user32.GetWindowDisplayAffinity(
+            hwnd,
+            ctypes.byref(current),
+        ):
+            error_code = ctypes.get_last_error()
+            return (
+                False,
+                "Windows aplicó la solicitud pero no pudo verificarla "
+                f"(WinError {error_code}).",
+            )
+
+        if current.value != affinity:
+            return (
+                False,
+                "Windows no confirmó el modo de protección solicitado "
+                f"(esperado 0x{affinity:08X}, actual 0x{current.value:08X}).",
+            )
+
+        return (
+            True,
+            (
+                "Ventana excluida de capturas compatibles."
+                if enabled
+                else "Protección de captura desactivada."
+            ),
+        )
+    except Exception as exc:
+        return False, f"No se pudo configurar la protección de captura: {exc}"
+
+
 def _now() -> str:
     return time.strftime("%I:%M:%S %p")
 
@@ -703,6 +783,7 @@ class AssistantTab(QWidget):
         self.controller = None
         self._starting = False
         self._stopping = False
+        self._capture_exclusion_active = False
 
         self._transcript_entries: dict[tuple[str, int], dict] = {}
         self._transcript_order: list[tuple[str, int]] = []
@@ -1065,8 +1146,67 @@ class AssistantTab(QWidget):
         else:
             self._stop_session()
 
+    def _enable_capture_exclusion(self) -> bool:
+        if self._capture_exclusion_active:
+            return True
+
+        ok, message = _set_window_capture_exclusion(
+            self.window(),
+            True,
+        )
+        if ok:
+            self._capture_exclusion_active = True
+            print("[Privacy] Stage 2 capture exclusion enabled.")
+            return True
+
+        print(f"[Privacy] Capture exclusion failed: {message}")
+        QMessageBox.critical(
+            self,
+            "Protección de pantalla",
+            (
+                "Stage 2 no se inició porque no se pudo ocultar la ventana "
+                "de las capturas de pantalla compatibles.\n\n"
+                f"{message}\n\n"
+                "No compartas la pantalla completa suponiendo que la app "
+                "está oculta."
+            ),
+        )
+        return False
+
+    def _disable_capture_exclusion(self) -> None:
+        if not self._capture_exclusion_active:
+            return
+
+        ok, message = _set_window_capture_exclusion(
+            self.window(),
+            False,
+        )
+        if ok:
+            self._capture_exclusion_active = False
+            print("[Privacy] Stage 2 capture exclusion disabled.")
+        else:
+            # Keep the flag true because Windows did not confirm removal.
+            print(
+                f"[Privacy] Could not disable capture exclusion: {message}"
+            )
+
     def _start_session(self) -> None:
         self._starting = True
+
+        if not self._enable_capture_exclusion():
+            self._starting = False
+            self.status_dot.setStyleSheet(
+                f"color: {RED}; font-size: 9px; background: transparent;"
+            )
+            self.status_label.setText("Capture unsafe")
+            self.activity_label.setText(
+                "Stage 2 not started · capture protection failed"
+            )
+            self.interview_button.setText("▶  Iniciar entrevista")
+            self.interview_button.setEnabled(True)
+            self.verify_groq_button.setEnabled(True)
+            return
+
         self._clear_session_ui()
 
         self.interview_button.setEnabled(False)
@@ -1691,6 +1831,7 @@ class AssistantTab(QWidget):
             self.controller = None
             self._starting = False
             self._stopping = False
+            self._disable_capture_exclusion()
             self.status_dot.setStyleSheet(
                 f"color: {MUTED_DARK}; font-size: 9px; background: transparent;"
             )
@@ -1705,6 +1846,7 @@ class AssistantTab(QWidget):
             self.controller = None
             self._starting = False
             self._stopping = False
+            self._disable_capture_exclusion()
             self.status_dot.setStyleSheet(
                 f"color: {RED}; font-size: 9px; background: transparent;"
             )
@@ -1726,6 +1868,8 @@ class AssistantTab(QWidget):
                 controller.stop()
             except Exception:
                 pass
+
+        self._disable_capture_exclusion()
 
 
 class MainWindow(QWidget):
