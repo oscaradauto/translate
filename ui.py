@@ -1820,10 +1820,21 @@ class AssistantTab(QWidget):
                 self.response_scope_combo.currentData()
                 or "interviewer"
             )
-            self.activity_label.setText(
+            listening_text = (
                 "Listening for both speakers"
                 if scope == "both"
                 else "Listening for interviewer"
+            )
+            self.activity_label.setText(
+                f"{listening_text} · Capture hidden"
+                if self._capture_exclusion_active
+                else listening_text
+            )
+            self.activity_label.setToolTip(
+                "La ventana principal está excluida de capturas compatibles "
+                "mientras Stage 2 está activo."
+                if self._capture_exclusion_active
+                else ""
             )
             return
 
