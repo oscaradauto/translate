@@ -1188,6 +1188,17 @@ class AssistantTab(QWidget):
         )
 
     def _on_question_candidate(self, text: str) -> None:
+        # A new interviewer turn is being analyzed. Clear the previous
+        # suggestion immediately so an answer to the old question is never
+        # mistaken for the current one.
+        self._answer_buffer = ""
+        self.answer_view.setPlainText("Analyzing question...")
+        self.answer_state.setText("Analyzing...")
+        self.understood_question.setText(
+            "Understood question: analyzing..."
+        )
+        self.regenerate_button.setEnabled(False)
+        self.copy_answer_button.setEnabled(False)
         self.activity_label.setText(
             "Analyzing interviewer turn..."
         )
@@ -1210,6 +1221,13 @@ class AssistantTab(QWidget):
         )
 
     def _on_question_waiting(self, text: str) -> None:
+        self._answer_buffer = ""
+        self.answer_view.setPlainText(
+            "Waiting for the interviewer to finish the question..."
+        )
+        self.answer_state.setText("Waiting")
+        self.regenerate_button.setEnabled(False)
+        self.copy_answer_button.setEnabled(False)
         self.activity_label.setText(
             "Waiting for the question to finish..."
         )
@@ -1220,6 +1238,13 @@ class AssistantTab(QWidget):
         )
 
     def _on_question_ignored(self, text: str) -> None:
+        self._answer_buffer = ""
+        self.answer_view.setPlainText(
+            "No technical answer needed. Waiting for the next question..."
+        )
+        self.answer_state.setText("Waiting")
+        self.regenerate_button.setEnabled(False)
+        self.copy_answer_button.setEnabled(False)
         self.activity_label.setText(
             "Non-technical turn ignored"
         )
