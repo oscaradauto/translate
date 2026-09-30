@@ -1168,6 +1168,13 @@ class AssistantTab(QWidget):
         if self.controller is not None:
             self.controller.set_response_scope(scope)
 
+        if self.status_label.text() == "Listening":
+            self.activity_label.setText(
+                "Listening for both speakers"
+                if scope == "both"
+                else "Listening for interviewer"
+            )
+
         self._refresh_answer_last_button()
 
     def _refresh_answer_last_button(self) -> None:
@@ -1273,7 +1280,7 @@ class AssistantTab(QWidget):
         self.regenerate_button.setEnabled(False)
         self.copy_answer_button.setEnabled(False)
         self.activity_label.setText(
-            "Analyzing interviewer turn..."
+            "Analyzing question..."
         )
 
     def _on_turn_understood(
@@ -1296,7 +1303,7 @@ class AssistantTab(QWidget):
     def _on_question_waiting(self, text: str) -> None:
         self._answer_buffer = ""
         self.answer_view.setPlainText(
-            "Waiting for the interviewer to finish the question..."
+            "Waiting for the speaker to finish the question..."
         )
         self.answer_state.setText("Waiting")
         self.regenerate_button.setEnabled(False)
@@ -1391,7 +1398,15 @@ class AssistantTab(QWidget):
             self.status_label.setText("Listening")
             self.interview_button.setText("■  Detener")
             self.interview_button.setEnabled(True)
-            self.activity_label.setText("Listening for interviewer")
+            scope = (
+                self.response_scope_combo.currentData()
+                or "interviewer"
+            )
+            self.activity_label.setText(
+                "Listening for both speakers"
+                if scope == "both"
+                else "Listening for interviewer"
+            )
             return
 
         if stopped:
