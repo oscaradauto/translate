@@ -54,6 +54,8 @@ class InterviewController:
         self._last_turn_speaker = ""
         self._last_question = ""
         self._last_answer = ""
+        self._topic_memory = ""
+        self._deferred_interviewer_text = ""
 
     def start(self) -> None:
         if self.running:
@@ -73,6 +75,8 @@ class InterviewController:
         self._last_turn_speaker = ""
         self._last_question = ""
         self._last_answer = ""
+        self._topic_memory = ""
+        self._deferred_interviewer_text = ""
 
         callbacks = {
             "on_status": self._on_listener_status,
@@ -236,6 +240,12 @@ class InterviewController:
             return
 
         candidate = " ".join(parts).strip()
+        if self._deferred_interviewer_text:
+            candidate = (
+                f"{self._deferred_interviewer_text} {candidate}"
+            ).strip()
+            self._deferred_interviewer_text = ""
+
         self._last_interviewer_text = candidate
         self._start_answer(candidate, force=False)
 
@@ -275,18 +285,48 @@ class InterviewController:
             if assistant is None or not self.running:
                 return
 
+            analysis = assistant.analyze_turn(
+                raw_turn=question,
+                recent_turns=recent_turns,
+                topic_memory=self._topic_memory,
+            )
+
+            if analysis.topic or analysis.terms:
+                memory_parts = []
+                if analysis.topic:
+                    memory_parts.append(f"Topic: {analysis.topic}")
+                if analysis.terms:
+                    memory_parts.append(
+                        "Terms: " + ", ".join(analysis.terms)
+                    )
+                self._topic_memory = ". ".join(memory_parts)
+
+            reconstructed = (
+                analysis.question.strip()
+                if analysis.question.strip()
+                else question.strip()
+            )
+
+            self._emit(
+                "on_turn_understood",
+                reconstructed,
+                analysis.topic,
+                analysis.language,
+            )
+
             if not force:
-                should_answer = assistant.should_answer(
-                    question=question,
-                    recent_turns=recent_turns,
-                )
-                if not should_answer:
-                    self._emit("on_question_ignored", question)
+                if analysis.action == "WAIT":
+                    self._deferred_interviewer_text = question.strip()
+                    self._emit("on_question_waiting", reconstructed)
                     return
 
-            self._last_question = question
-            self._emit("on_question_detected", question)
-            self._emit("on_answer_started", question)
+                if analysis.action != "ANSWER":
+                    self._emit("on_question_ignored", reconstructed)
+                    return
+
+            self._last_question = reconstructed
+            self._emit("on_question_detected", reconstructed)
+            self._emit("on_answer_started", reconstructed)
 
             chunks: list[str] = []
 
@@ -295,10 +335,11 @@ class InterviewController:
                 self._emit("on_answer_delta", delta)
 
             answer = assistant.stream_answer(
-                question=question,
+                question=reconstructed,
                 recent_turns=recent_turns,
                 language=language,
                 on_delta=on_delta,
+                topic_memory=self._topic_memory,
             )
 
             self._last_answer = answer or "".join(chunks).strip()
