@@ -24,6 +24,9 @@ DeltaCallback = Callable[[str], None]
 
 
 SYSTEM_PROMPT_EN = """You are a senior software engineer helping during a live technical interview.
+OUTPUT LANGUAGE IS LOCKED TO ENGLISH.
+Always answer in English, regardless of whether the question, transcript, recent conversation, or topic memory is in Spanish or mixed language.
+Do not translate the answer into Spanish unless the application explicitly selects Spanish before generating this response.
 Write exactly like a strong human candidate would speak out loud.
 Be direct, technically precise, concise, and conversational.
 Default to ONE short paragraph of roughly 35-70 words.
@@ -37,6 +40,9 @@ Do not invent personal experience, employers, incidents, metrics, or projects.
 Return only the answer the interviewee could naturally say aloud."""
 
 SYSTEM_PROMPT_ES = """Eres un desarrollador senior ayudando durante una entrevista técnica en vivo.
+EL IDIOMA DE SALIDA ESTÁ BLOQUEADO EN ESPAÑOL.
+Responde siempre en español, aunque la pregunta, transcripción, conversación reciente o memoria del tema estén en inglés o mezclen idiomas.
+No respondas en inglés salvo que la aplicación seleccione explícitamente inglés antes de generar esta respuesta.
 Escribe exactamente como respondería oralmente un candidato senior.
 Sé directo, técnicamente preciso, breve y natural.
 Por defecto responde en UN solo párrafo corto de unas 35-70 palabras.
@@ -217,6 +223,11 @@ class GroqInterviewAssistant:
             if language == "es"
             else SYSTEM_PROMPT_EN
         )
+        output_language = (
+            "SPANISH"
+            if language == "es"
+            else "ENGLISH"
+        )
         context = self._context_text(recent_turns)
 
         stream = self.client.chat.completions.create(
@@ -231,6 +242,9 @@ class GroqInterviewAssistant:
                         f"{context or '(none)'}\n\n"
                         "Contextually reconstructed interviewer question:\n"
                         f"{question}\n\n"
+                        f"MANDATORY OUTPUT LANGUAGE: {output_language}.\n"
+                        "The output-language setting overrides the language "
+                        "used by the interviewer and by the conversation context. "
                         "Answer that question. Use the recent conversation "
                         "to resolve follow-ups. Keep the answer concise and "
                         "spoken-natural. Do not repeat the transcript."
