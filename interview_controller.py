@@ -124,16 +124,15 @@ class InterviewController:
             self._emit("on_language_changed", language)
 
     def answer_last_interviewer_turn(self) -> None:
-        """Manually answer the latest interviewer turn.
+        """Manually answer the latest complete turn.
 
-        During solo development/testing there may be no INTERVIEWER audio yet.
-        In that case fall back to the latest finalized YOU utterance so the
-        developer can verify Groq end-to-end without a second device.
+        In solo testing, combine the latest consecutive YOU fragments because
+        Faster-Whisper may split one spoken question into multiple finals.
         Automatic answers still only originate from INTERVIEWER turns.
         """
         question = self._last_interviewer_text.strip()
         if not question:
-            question = self._last_turn_text.strip()
+            question = self._recent_speaker_text("YOU", max_turns=4)
 
         if not question:
             self._emit(
@@ -143,6 +142,24 @@ class InterviewController:
             return
 
         self._start_answer(question, force=True)
+
+    def _recent_speaker_text(
+        self,
+        speaker: str,
+        max_turns: int = 4,
+    ) -> str:
+        parts: list[str] = []
+        for turn in reversed(self._turns):
+            if turn.speaker != speaker:
+                if parts:
+                    break
+                continue
+
+            parts.append(turn.text)
+            if len(parts) >= max_turns:
+                break
+
+        return " ".join(reversed(parts)).strip()
 
     def regenerate(self) -> None:
         question = self._last_question.strip()
