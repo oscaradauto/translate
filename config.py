@@ -90,6 +90,14 @@ WHISPER_INITIAL_PROMPT = os.getenv(
 ASSISTANT_LANGUAGE = os.getenv("ASSISTANT_LANGUAGE", "en")
 AI_PROVIDER = os.getenv("AI_PROVIDER", "groq")
 
+# Which speaker is allowed to trigger Stage 2 answers.
+# interviewer: real interview mode (recommended)
+# both: useful for solo testing or interactive assistant usage
+ASSISTANT_RESPONSE_SCOPE = os.getenv(
+    "ASSISTANT_RESPONSE_SCOPE",
+    "interviewer",
+).strip().lower()
+
 # Stage 2 prioritizes transcription quality over local-only execution.
 # Groq Whisper Large V3 handles English/Spanish input; the local multilingual
 # Faster-Whisper model remains available as an offline fallback.
