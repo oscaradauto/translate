@@ -292,12 +292,18 @@ class LocalMicStreamer:
         next_segment_id: Callable[[], int],
         local_speech_gate: _LocalSpeechGate,
         on_error,
+        speech_end_ms: int = SUBTITLE_SPEECH_END_MS,
+        max_utterance_seconds: float = SUBTITLE_MAX_UTTERANCE_SECONDS,
+        partials_enabled: bool = True,
     ) -> None:
         self.device_index = device_index
         self.transcriber = transcriber
         self.next_segment_id = next_segment_id
         self.local_speech_gate = local_speech_gate
         self.on_error = on_error
+        self.speech_end_ms = speech_end_ms
+        self.max_utterance_seconds = max_utterance_seconds
+        self.partials_enabled = partials_enabled
 
         self.running = False
         self.thread: threading.Thread | None = None
@@ -388,6 +394,9 @@ class LocalMicStreamer:
             self.next_segment_id,
             speech_start_ms=MIC_SPEECH_START_MS,
             min_voiced_ms=MIC_MIN_VOICED_MS,
+            speech_end_ms=self.speech_end_ms,
+            max_utterance_seconds=self.max_utterance_seconds,
+            partials_enabled=self.partials_enabled,
         )
         frame_count = int(self.sample_rate * VAD_FRAME_MS / 1000)
 
@@ -453,11 +462,17 @@ class LocalSystemAudioStreamer:
         next_segment_id: Callable[[], int],
         local_speech_gate: _LocalSpeechGate,
         on_error,
+        speech_end_ms: int = SUBTITLE_SPEECH_END_MS,
+        max_utterance_seconds: float = SUBTITLE_MAX_UTTERANCE_SECONDS,
+        partials_enabled: bool = True,
     ) -> None:
         self.transcriber = transcriber
         self.next_segment_id = next_segment_id
         self.local_speech_gate = local_speech_gate
         self.on_error = on_error
+        self.speech_end_ms = speech_end_ms
+        self.max_utterance_seconds = max_utterance_seconds
+        self.partials_enabled = partials_enabled
         self.running = False
         self.thread: threading.Thread | None = None
 
@@ -485,6 +500,9 @@ class LocalSystemAudioStreamer:
             self.next_segment_id,
             speech_start_ms=MEETING_SPEECH_START_MS,
             min_voiced_ms=MEETING_MIN_VOICED_MS,
+            speech_end_ms=self.speech_end_ms,
+            max_utterance_seconds=self.max_utterance_seconds,
+            partials_enabled=self.partials_enabled,
         )
 
         try:
