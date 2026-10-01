@@ -1,99 +1,697 @@
+profile:
+  name: "Senior Software Developer"
+  level: "senior"
+  purpose_en: >
+    Reference profile for Stage 2 practice and permitted interview assistance.
+    It describes the expected competencies and communication style of a strong
+    senior software developer. It intentionally avoids invented employers,
+    project names, dates, metrics, and unverifiable personal achievements.
+  purpose_es: >
+    Perfil de referencia para práctica de Stage 2 y entrevistas donde la
+    asistencia esté permitida. Describe las competencias y el estilo de
+    comunicación esperados de un desarrollador de software senior. Evita
+    empleadores, proyectos, fechas, métricas y logros personales inventados.
+
 skills:
-  - topic: "Java Concurrency & Multithreading"
+  - topic: "Senior Engineering Mindset"
+    keywords:
+      - "senior developer"
+      - "senior engineer"
+      - "seniority"
+      - "engineering mindset"
+      - "trade-off"
+      - "tradeoffs"
+      - "technical decision"
+      - "decision making"
+      - "desarrollador senior"
+      - "ingeniero senior"
+      - "decisión técnica"
+    summary_en: >
+      A senior developer balances correctness, maintainability, delivery speed,
+      operational risk, and business impact. The goal is not only to write
+      working code, but to make decisions that keep systems understandable,
+      observable, testable, and safe to evolve.
+    summary_es: >
+      Un desarrollador senior equilibra corrección, mantenibilidad, velocidad
+      de entrega, riesgo operativo e impacto de negocio. El objetivo no es solo
+      escribir código que funcione, sino tomar decisiones que mantengan los
+      sistemas comprensibles, observables, testeables y fáciles de evolucionar.
+    answer_guidance_en: >
+      Explain the decision criteria and main trade-off instead of presenting
+      one technology or pattern as universally correct.
+    answer_guidance_es: >
+      Explica los criterios de decisión y el trade-off principal en lugar de
+      presentar una tecnología o patrón como universalmente correcto.
+
+  - topic: "Java Core and Object-Oriented Design"
+    keywords:
+      - "java"
+      - "jvm"
+      - "object oriented"
+      - "oop"
+      - "solid"
+      - "immutability"
+      - "equals hashcode"
+      - "optional"
+      - "streams"
+      - "lambda"
+      - "functional interface"
+      - "colecciones"
+      - "inmutabilidad"
+    tools:
+      - "Java"
+      - "JVM"
+      - "Java Collections"
+      - "Streams"
+      - "Optional"
+    summary_en: >
+      Strong Java work emphasizes clear domain modeling, immutability where it
+      reduces accidental state changes, correct equals/hashCode contracts,
+      appropriate collection choices, readable Stream usage, and APIs that make
+      invalid states difficult to represent.
+    summary_es: >
+      Un buen trabajo en Java enfatiza modelado claro del dominio, inmutabilidad
+      cuando reduce cambios accidentales de estado, contratos correctos de
+      equals/hashCode, selección adecuada de colecciones, uso legible de Streams
+      y APIs que dificulten representar estados inválidos.
+    answer_guidance_en: >
+      Prefer simple Java solutions first, then discuss performance, concurrency,
+      or framework implications only when they materially affect the problem.
+    answer_guidance_es: >
+      Prefiere primero soluciones simples en Java y después discute rendimiento,
+      concurrencia o implicaciones de framework solo cuando afecten realmente el problema.
+
+  - topic: "Spring Boot and Dependency Injection"
+    keywords:
+      - "spring"
+      - "spring boot"
+      - "dependency injection"
+      - "inversion of control"
+      - "ioc"
+      - "bean"
+      - "configuration"
+      - "qualifier"
+      - "primary"
+      - "autowired"
+      - "inyección de dependencias"
+    tools:
+      - "Spring Boot"
+      - "Spring Framework"
+    summary_en: >
+      Spring Boot is used to build maintainable services with explicit
+      dependencies, constructor injection, clear configuration boundaries, and
+      focused components. Dependency injection improves testability and reduces
+      direct coupling when abstractions represent meaningful boundaries.
+    summary_es: >
+      Spring Boot se usa para construir servicios mantenibles con dependencias
+      explícitas, inyección por constructor, límites claros de configuración y
+      componentes enfocados. La inyección de dependencias mejora la testabilidad
+      y reduce acoplamiento cuando las abstracciones representan límites reales.
+    answer_guidance_en: >
+      Favor constructor injection, small cohesive services, and explicit
+      configuration over hidden runtime wiring.
+    answer_guidance_es: >
+      Favorece inyección por constructor, servicios pequeños y cohesivos, y
+      configuración explícita sobre wiring oculto en tiempo de ejecución.
+
+  - topic: "REST APIs and API Design"
+    keywords:
+      - "rest"
+      - "rest api"
+      - "api design"
+      - "http"
+      - "get"
+      - "post"
+      - "put"
+      - "patch"
+      - "delete"
+      - "status code"
+      - "idempotent"
+      - "versioning"
+      - "endpoint"
+      - "api rest"
+    tools:
+      - "HTTP"
+      - "REST"
+      - "OpenAPI"
+    summary_en: >
+      Good API design uses resource-oriented contracts, predictable status codes,
+      validation, idempotency where required, clear error responses, backward
+      compatibility, and versioning only when compatibility cannot be preserved.
+    summary_es: >
+      Un buen diseño de APIs utiliza contratos orientados a recursos, códigos de
+      estado predecibles, validación, idempotencia cuando aplica, errores claros,
+      compatibilidad hacia atrás y versionado cuando no es posible conservarla.
+    answer_guidance_en: >
+      Discuss the API contract before implementation details and call out
+      idempotency, error behavior, and compatibility when relevant.
+    answer_guidance_es: >
+      Discute primero el contrato de la API y luego la implementación, destacando
+      idempotencia, manejo de errores y compatibilidad cuando sea relevante.
+
+  - topic: "Microservices and Distributed Systems"
+    keywords:
+      - "microservices"
+      - "distributed system"
+      - "distributed systems"
+      - "service discovery"
+      - "api gateway"
+      - "circuit breaker"
+      - "retry"
+      - "timeout"
+      - "bulkhead"
+      - "fault tolerance"
+      - "resilience"
+      - "microservicios"
+      - "tolerancia a fallos"
+    tools:
+      - "Spring Boot"
+      - "REST"
+      - "Kafka"
+      - "Redis"
+    summary_en: >
+      Microservices are useful when service boundaries match business ownership
+      and independent delivery needs. They introduce network failures, partial
+      availability, distributed observability, data consistency, deployment,
+      and operational complexity that must be designed intentionally.
+    summary_es: >
+      Los microservicios son útiles cuando los límites de servicio coinciden con
+      ownership de negocio y necesidades de despliegue independiente. Introducen
+      fallos de red, disponibilidad parcial, observabilidad distribuida,
+      consistencia de datos y complejidad operacional que deben diseñarse de
+      forma intencional.
+    answer_guidance_en: >
+      Mention boundaries and failure modes before naming infrastructure.
+      Prefer timeouts and bounded retries, and use circuit breakers when repeated
+      downstream failures would otherwise amplify load.
+    answer_guidance_es: >
+      Menciona límites y modos de fallo antes de infraestructura. Prefiere
+      timeouts y reintentos limitados, y usa circuit breakers cuando fallos
+      repetidos de un downstream amplificarían la carga.
+
+  - topic: "Kafka and Event-Driven Architecture"
+    keywords:
+      - "kafka"
+      - "event driven"
+      - "event-driven"
+      - "topic"
+      - "partition"
+      - "consumer group"
+      - "offset"
+      - "producer"
+      - "consumer"
+      - "eventual consistency"
+      - "arquitectura orientada a eventos"
+    tools:
+      - "Apache Kafka"
+    summary_en: >
+      Kafka is appropriate for durable event streams, decoupled processing, and
+      asynchronous workflows. Important design points include partition keys,
+      ordering boundaries, consumer groups, replay, idempotent processing,
+      schema evolution, and handling duplicates or poison messages.
+    summary_es: >
+      Kafka es apropiado para streams de eventos durables, procesamiento
+      desacoplado y flujos asíncronos. Los puntos importantes incluyen claves de
+      partición, límites de orden, consumer groups, replay, procesamiento
+      idempotente, evolución de esquemas y manejo de duplicados o mensajes problemáticos.
+    answer_guidance_en: >
+      Explain ordering at partition scope and make delivery semantics explicit.
+    answer_guidance_es: >
+      Explica que el orden se garantiza dentro de una partición y deja explícita
+      la semántica de entrega.
+
+  - topic: "SQL JPA and Transaction Management"
+    keywords:
+      - "sql"
+      - "database"
+      - "jpa"
+      - "hibernate"
+      - "transaction"
+      - "transactional"
+      - "acid"
+      - "isolation"
+      - "index"
+      - "query"
+      - "fetch join"
+      - "lazy"
+      - "eager"
+      - "base de datos"
+      - "transacción"
+    tools:
+      - "SQL"
+      - "JPA"
+      - "Hibernate"
+    summary_en: >
+      Persistence design starts with data access patterns, transaction
+      boundaries, indexes, consistency requirements, and query behavior.
+      JPA is useful for domain persistence but requires deliberate fetch
+      strategies to avoid N+1 queries, excessive eager loading, and long transactions.
+    summary_es: >
+      El diseño de persistencia comienza por patrones de acceso, límites de
+      transacción, índices, requisitos de consistencia y comportamiento de las
+      consultas. JPA es útil para persistencia de dominio, pero requiere
+      estrategias de carga deliberadas para evitar N+1, eager loading excesivo
+      y transacciones largas.
+    answer_guidance_en: >
+      Relate isolation and indexes to the actual consistency and query patterns
+      instead of choosing the strongest option by default.
+    answer_guidance_es: >
+      Relaciona aislamiento e índices con los patrones reales de consistencia y
+      consulta en lugar de elegir siempre la opción más fuerte.
+
+  - topic: "MongoDB and NoSQL"
+    keywords:
+      - "mongodb"
+      - "nosql"
+      - "document database"
+      - "mongo template"
+      - "aggregation"
+      - "lookup"
+      - "documento"
+    tools:
+      - "MongoDB"
+      - "Spring Data MongoDB"
+    summary_en: >
+      Document databases fit workloads where related data can be modeled around
+      aggregate access patterns and schema flexibility is valuable. Modeling
+      should minimize expensive cross-document joins and preserve the consistency
+      guarantees the use case actually needs.
+    summary_es: >
+      Las bases documentales encajan cuando los datos relacionados pueden
+      modelarse alrededor de patrones de acceso por agregado y la flexibilidad
+      de esquema aporta valor. El modelado debe minimizar joins costosos entre
+      documentos y conservar las garantías de consistencia necesarias.
+    answer_guidance_en: >
+      Compare data model and access pattern first rather than treating SQL and
+      NoSQL as interchangeable storage choices.
+    answer_guidance_es: >
+      Compara primero modelo de datos y patrón de acceso en vez de tratar SQL y
+      NoSQL como opciones intercambiables.
+
+  - topic: "Java Concurrency and Multithreading"
     keywords:
       - "concurrency"
       - "multithreading"
-      - "synchronization"
+      - "thread"
       - "executorservice"
-      - "thread pool"
-      - "concurrent collections"
+      - "completablefuture"
+      - "synchronized"
+      - "lock"
+      - "reentrantlock"
+      - "concurrenthashmap"
+      - "race condition"
+      - "deadlock"
       - "concurrencia"
       - "hilos"
-      - "sincronizacion"
-    experience_years: "5+ años"
-    is_strong_area: true
-    summary_es: >
-      He trabajado con concurrencia en Java durante más de 5 años, usando ExecutorService,
-      thread pools personalizados y colecciones concurrentes como ConcurrentHashMap y
-      CopyOnWriteArrayList. Es una de mis áreas más fuertes.
+    tools:
+      - "ExecutorService"
+      - "CompletableFuture"
+      - "ConcurrentHashMap"
+      - "ReentrantLock"
     summary_en: >
-      I've worked with Java concurrency for over 5 years, using ExecutorService, custom
-      thread pools, and concurrent collections like ConcurrentHashMap and
-      CopyOnWriteArrayList. It's one of my strongest technical areas.
-    recent_production_example_es: >
-      Recientemente optimicé un servicio que procesaba pagos en paralelo, reduciendo
-      contención de locks migrando de synchronized a ReentrantLock con timeout,
-      hace aproximadamente 3 meses.
-    recent_production_example_en: >
-      Recently I optimized a payment processing service running in parallel, reducing
-      lock contention by migrating from synchronized blocks to ReentrantLock with
-      timeout, about 3 months ago.
+      Concurrency design focuses on minimizing shared mutable state, defining
+      ownership clearly, bounding thread pools and queues, handling cancellation
+      and timeouts, and choosing synchronization primitives according to the
+      access pattern rather than by habit.
+    summary_es: >
+      El diseño concurrente se enfoca en minimizar estado mutable compartido,
+      definir ownership claramente, limitar thread pools y colas, manejar
+      cancelación y timeouts, y escoger primitivas de sincronización según el
+      patrón de acceso.
+    answer_guidance_en: >
+      Start with the race or coordination requirement, then choose the smallest
+      synchronization mechanism that satisfies it.
+    answer_guidance_es: >
+      Empieza por el requisito de coordinación o race condition y elige el
+      mecanismo de sincronización más pequeño que lo resuelva.
 
-  - topic: "JVM Performance & Troubleshooting"
+  - topic: "JVM Performance and Troubleshooting"
     keywords:
       - "jvm performance"
       - "garbage collection"
-      - "memory management"
-      - "performance tuning"
       - "gc"
-      - "rendimiento jvm"
-      - "gestion de memoria"
-    experience_years: "4+ años"
-    is_strong_area: true
-    summary_es: >
-      He sido responsable de análisis y optimización de rendimiento de JVM en producción,
-      ajustando parámetros de garbage collection (G1GC, tamaños de heap) y analizando
-      comportamiento de hilos bajo carga. Es una de mis áreas fuertes.
-    summary_en: >
-      I've been responsible for JVM performance analysis and optimization in production,
-      tuning garbage collection parameters (G1GC, heap sizing) and analyzing thread
-      behavior under load. It's one of my strong areas.
-
-  - topic: "Thread Dumps / Heap Dumps"
-    keywords:
+      - "heap"
+      - "memory leak"
       - "thread dump"
       - "heap dump"
       - "jstack"
       - "jcmd"
       - "jfr"
       - "visualvm"
-      - "jconsole"
-      - "mat"
-      - "volcado de hilos"
-      - "volcado de memoria"
-    experience_years: "3+ años"
-    is_strong_area: true
-    tools_used:
+      - "eclipse mat"
+      - "rendimiento"
+      - "fuga de memoria"
+    tools:
       - "jstack"
       - "jcmd"
+      - "Java Flight Recorder"
       - "VisualVM"
       - "Eclipse MAT"
-      - "Java Flight Recorder (JFR)"
-    summary_es: >
-      Sí, he capturado y analizado thread dumps y heap dumps personalmente, usando
-      principalmente jstack y jcmd para capturas rápidas en producción, y Eclipse MAT
-      para análisis profundo de memory leaks.
     summary_en: >
-      Yes, I've personally captured and analyzed thread dumps and heap dumps, mainly
-      using jstack and jcmd for quick production captures, and Eclipse MAT for deep
-      memory leak analysis.
+      JVM troubleshooting should be evidence driven: confirm the symptom with
+      latency, CPU, memory, GC, and thread metrics, then use thread dumps, heap
+      dumps, JFR, or allocation data to narrow the cause before changing JVM
+      flags or code.
+    summary_es: >
+      El troubleshooting de JVM debe basarse en evidencia: primero confirmar el
+      síntoma con métricas de latencia, CPU, memoria, GC e hilos, y luego usar
+      thread dumps, heap dumps, JFR o datos de allocations para reducir la causa
+      antes de cambiar flags o código.
+    answer_guidance_en: >
+      Separate diagnosis from remediation and avoid tuning the JVM before
+      identifying the actual bottleneck.
+    answer_guidance_es: >
+      Separa diagnóstico de remediación y evita tunear la JVM antes de
+      identificar el cuello de botella real.
 
-  - topic: "Production Incident Example"
+  - topic: "Caching and Redis"
     keywords:
+      - "redis"
+      - "cache"
+      - "caching"
+      - "cache invalidation"
+      - "ttl"
+      - "distributed cache"
+      - "caché"
+    tools:
+      - "Redis"
+    summary_en: >
+      Caching is a latency and load optimization with consistency trade-offs.
+      A senior design defines cache ownership, keys, TTL, invalidation,
+      failure behavior, stampede protection, and what happens when cached data
+      is stale or Redis is unavailable.
+    summary_es: >
+      El caché es una optimización de latencia y carga con trade-offs de
+      consistencia. Un diseño senior define ownership, claves, TTL, invalidación,
+      comportamiento ante fallos, protección contra stampede y qué ocurre si
+      los datos están stale o Redis no está disponible.
+    answer_guidance_en: >
+      Explain invalidation and failure behavior, not only the happy-path speedup.
+    answer_guidance_es: >
+      Explica invalidación y comportamiento ante fallos, no solo la mejora de velocidad.
+
+  - topic: "System Design and Scalability"
+    keywords:
+      - "system design"
+      - "scalability"
+      - "scale"
+      - "high availability"
+      - "load balancer"
+      - "horizontal scaling"
+      - "vertical scaling"
+      - "throughput"
+      - "capacity"
+      - "diseño de sistemas"
+      - "escalabilidad"
+    summary_en: >
+      System design starts by clarifying scale, latency, availability,
+      consistency, traffic patterns, data growth, and failure tolerance. The
+      architecture should be the simplest one that satisfies those constraints
+      and should expose clear bottlenecks and evolution paths.
+    summary_es: >
+      El diseño de sistemas empieza aclarando escala, latencia, disponibilidad,
+      consistencia, patrones de tráfico, crecimiento de datos y tolerancia a
+      fallos. La arquitectura debe ser la más simple que cumpla esas restricciones
+      y debe mostrar cuellos de botella y caminos de evolución claros.
+    answer_guidance_en: >
+      State assumptions, identify the critical path, then discuss scaling and
+      resilience rather than jumping directly to a complex architecture.
+    answer_guidance_es: >
+      Declara supuestos, identifica el camino crítico y después discute
+      escalabilidad y resiliencia en vez de saltar directamente a una arquitectura compleja.
+
+  - topic: "Software Architecture and ADRs"
+    keywords:
+      - "architecture"
+      - "adr"
+      - "architecture decision record"
+      - "design pattern"
+      - "clean architecture"
+      - "hexagonal"
+      - "layered architecture"
+      - "arquitectura"
+      - "registro de decisión"
+    summary_en: >
+      Architecture decisions should make important constraints and trade-offs
+      explicit. ADRs are useful when a decision has lasting consequences because
+      they record context, alternatives, the chosen direction, and why it was
+      selected so future engineers do not have to rediscover the reasoning.
+    summary_es: >
+      Las decisiones de arquitectura deben hacer explícitas las restricciones y
+      trade-offs importantes. Los ADR son útiles cuando una decisión tiene
+      consecuencias duraderas porque registran contexto, alternativas, dirección
+      elegida y por qué se seleccionó.
+    answer_guidance_en: >
+      Focus on decision context and consequences, not architecture terminology alone.
+    answer_guidance_es: >
+      Enfócate en contexto y consecuencias de la decisión, no solo en terminología.
+
+  - topic: "Testing Strategy and Code Quality"
+    keywords:
+      - "testing"
+      - "unit test"
+      - "integration test"
+      - "contract test"
+      - "test pyramid"
+      - "coverage"
+      - "mock"
+      - "quality"
+      - "sonarqube"
+      - "pr review"
+      - "code review"
+      - "pruebas"
+      - "calidad"
+    summary_en: >
+      Testing should protect behavior at the cheapest useful level. Unit tests
+      cover focused logic, integration tests verify important boundaries, and
+      contract or end-to-end tests protect critical interactions. Coverage is a
+      signal, not a substitute for meaningful assertions and risk-based testing.
+    summary_es: >
+      Las pruebas deben proteger comportamiento en el nivel útil más económico.
+      Unit tests cubren lógica enfocada, integration tests verifican límites
+      importantes y contract o end-to-end tests protegen interacciones críticas.
+      Coverage es una señal, no un sustituto de assertions útiles.
+    answer_guidance_en: >
+      Tie the testing strategy to failure risk and feedback speed.
+    answer_guidance_es: >
+      Relaciona la estrategia de pruebas con riesgo de fallo y velocidad de feedback.
+
+  - topic: "Security and Authentication"
+    keywords:
+      - "security"
+      - "authentication"
+      - "authorization"
+      - "oauth"
+      - "oauth2"
+      - "oidc"
+      - "jwt"
+      - "token"
+      - "secret"
+      - "rbac"
+      - "seguridad"
+      - "autenticación"
+      - "autorización"
+    tools:
+      - "OAuth 2.0"
+      - "OIDC"
+      - "JWT"
+    summary_en: >
+      Authentication establishes identity and authorization decides permitted
+      actions. Secure service design applies least privilege, validates tokens
+      correctly, protects secrets, avoids putting sensitive data in tokens or
+      logs, and treats authorization as a server-side responsibility.
+    summary_es: >
+      La autenticación establece identidad y la autorización decide acciones
+      permitidas. Un diseño seguro aplica mínimo privilegio, valida tokens
+      correctamente, protege secretos, evita datos sensibles en tokens o logs y
+      trata la autorización como responsabilidad del servidor.
+    answer_guidance_en: >
+      Distinguish identity, token validation, and authorization policy clearly.
+    answer_guidance_es: >
+      Distingue claramente identidad, validación de token y política de autorización.
+
+  - topic: "Cloud Containers and Deployment"
+    keywords:
+      - "azure"
+      - "aws"
+      - "cloud"
+      - "docker"
+      - "kubernetes"
+      - "container"
+      - "deployment"
+      - "autoscaling"
+      - "serverless"
+      - "nube"
+      - "despliegue"
+    tools:
+      - "Azure"
+      - "Docker"
+      - "Kubernetes"
+    summary_en: >
+      Cloud deployment design considers statelessness, configuration and
+      secrets, health probes, resource limits, autoscaling signals, deployment
+      strategy, rollback, observability, and cost. Containers package workloads;
+      orchestration solves scheduling and lifecycle concerns but adds complexity.
+    summary_es: >
+      El diseño de despliegue en cloud considera statelessness, configuración y
+      secretos, health probes, límites de recursos, señales de autoscaling,
+      estrategia de despliegue, rollback, observabilidad y costo. Los contenedores
+      empaquetan workloads; la orquestación resuelve scheduling y lifecycle con
+      complejidad adicional.
+    answer_guidance_en: >
+      Describe the operational requirement before choosing a cloud service.
+    answer_guidance_es: >
+      Describe primero el requisito operacional antes de elegir un servicio cloud.
+
+  - topic: "CI CD and Engineering Delivery"
+    keywords:
+      - "ci cd"
+      - "ci/cd"
+      - "pipeline"
+      - "github actions"
+      - "continuous integration"
+      - "continuous delivery"
+      - "continuous deployment"
+      - "release"
+      - "rollback"
+      - "feature flag"
+      - "pipeline de despliegue"
+    tools:
+      - "GitHub Actions"
+      - "Git"
+    summary_en: >
+      A reliable delivery pipeline gives fast feedback, runs repeatable tests and
+      quality checks, produces immutable artifacts, separates configuration from
+      code, and supports safe promotion, observability, and rollback. Deployment
+      frequency should not reduce control over production risk.
+    summary_es: >
+      Un pipeline confiable da feedback rápido, ejecuta pruebas y controles de
+      calidad repetibles, produce artefactos inmutables, separa configuración de
+      código y soporta promoción segura, observabilidad y rollback.
+    answer_guidance_en: >
+      Separate continuous delivery from automatic deployment and mention rollback.
+    answer_guidance_es: >
+      Separa continuous delivery de despliegue automático y menciona rollback.
+
+  - topic: "Observability and Production Support"
+    keywords:
+      - "observability"
+      - "monitoring"
+      - "logging"
+      - "metrics"
+      - "tracing"
       - "production issue"
       - "incident"
       - "root cause"
       - "latency"
-      - "performance degradation"
-      - "incidente en produccion"
-      - "causa raiz"
-    recent_incident_es: >
-      El incidente más reciente fue un memory leak causado por un ExecutorService que
-      nunca se cerraba correctamente, acumulando hilos huérfanos. La causa raíz fue
-      falta de shutdown() en el ciclo de vida del servicio, y la solución fue implementar
-      un try-with-resources y monitoreo de thread count.
-    recent_incident_en: >
-      The most recent incident was a memory leak caused by an ExecutorService that was
-      never properly shut down, accumulating orphaned threads. The root cause was a
-      missing shutdown() call in the service lifecycle, and the fix was implementing
-      try-with-resources along with thread count monitoring.
+      - "alert"
+      - "monitoreo"
+      - "incidente"
+      - "causa raíz"
+    tools:
+      - "Logs"
+      - "Metrics"
+      - "Distributed Tracing"
+    summary_en: >
+      Production troubleshooting starts by establishing impact, timeline, and
+      recent changes, then correlating logs, metrics, traces, and dependency
+      health. Stabilization comes before deep root-cause work, and follow-up
+      should address both the defect and missing detection or recovery controls.
+    summary_es: >
+      El troubleshooting en producción empieza estableciendo impacto, timeline y
+      cambios recientes, y correlacionando logs, métricas, traces y salud de
+      dependencias. La estabilización ocurre antes del root cause profundo y el
+      seguimiento debe cubrir tanto el defecto como controles faltantes.
+    answer_guidance_en: >
+      Structure incident answers as impact, diagnosis, mitigation, root cause,
+      prevention, without inventing a personal incident.
+    answer_guidance_es: >
+      Estructura respuestas de incidentes como impacto, diagnóstico, mitigación,
+      causa raíz y prevención, sin inventar un incidente personal.
+
+  - topic: "Agile Scrum and Team Delivery"
+    keywords:
+      - "scrum"
+      - "agile"
+      - "sprint"
+      - "backlog"
+      - "refinement"
+      - "planning"
+      - "retrospective"
+      - "daily"
+      - "story points"
+      - "acceptance criteria"
+      - "ágil"
+      - "planeación"
+    summary_en: >
+      Agile delivery works best when the team has clear outcomes, small
+      increments, visible dependencies, useful acceptance criteria, and frequent
+      feedback. Scrum events should improve coordination and learning rather
+      than becoming meetings performed only for process compliance.
+    summary_es: >
+      La entrega ágil funciona mejor con resultados claros, incrementos pequeños,
+      dependencias visibles, criterios de aceptación útiles y feedback frecuente.
+      Los eventos Scrum deben mejorar coordinación y aprendizaje, no convertirse
+      en reuniones hechas solo por cumplimiento de proceso.
+    answer_guidance_en: >
+      Emphasize flow, feedback, blockers, risk, and shared ownership rather than ceremonies alone.
+    answer_guidance_es: >
+      Enfatiza flujo, feedback, bloqueos, riesgo y ownership compartido, no solo ceremonias.
+
+  - topic: "Technical Leadership and Mentoring"
+    keywords:
+      - "technical leadership"
+      - "leadership"
+      - "mentor"
+      - "mentoring"
+      - "code review"
+      - "guide team"
+      - "junior developer"
+      - "knowledge sharing"
+      - "liderazgo técnico"
+      - "mentoría"
+    summary_en: >
+      Senior technical leadership is collaborative: clarify goals and
+      constraints, make decisions transparent, create space for engineers to
+      contribute, review important designs, unblock delivery, share context, and
+      help others build independent decision-making ability.
+    summary_es: >
+      El liderazgo técnico senior es colaborativo: clarifica objetivos y
+      restricciones, hace transparentes las decisiones, permite contribuir a los
+      ingenieros, revisa diseños importantes, desbloquea entregas, comparte
+      contexto y ayuda a otros a desarrollar autonomía.
+    answer_guidance_en: >
+      Describe leadership through enablement, decision quality, and team outcomes,
+      not authority or micromanagement.
+    answer_guidance_es: >
+      Describe liderazgo mediante habilitación del equipo, calidad de decisiones
+      y resultados, no autoridad o micromanagement.
+
+  - topic: "Stakeholder Communication and Prioritization"
+    keywords:
+      - "stakeholder"
+      - "business partner"
+      - "product owner"
+      - "priority"
+      - "prioritization"
+      - "competing priorities"
+      - "deadline"
+      - "scope"
+      - "expectations"
+      - "stakeholder management"
+      - "prioridad"
+      - "expectativas"
+    summary_en: >
+      Senior engineers communicate technical constraints in terms of business
+      impact, options, risk, and timing. When priorities conflict, make trade-offs
+      visible, clarify decision ownership, identify dependencies, and avoid
+      promising dates before uncertainty and scope are understood.
+    summary_es: >
+      Los ingenieros senior comunican restricciones técnicas en términos de
+      impacto de negocio, opciones, riesgo y tiempo. Cuando compiten prioridades,
+      hacen visibles los trade-offs, aclaran ownership de decisión, identifican
+      dependencias y evitan prometer fechas antes de entender incertidumbre y alcance.
+    answer_guidance_en: >
+      Adapt the level of technical detail to the audience and communicate risks early.
+    answer_guidance_es: >
+      Adapta el nivel de detalle técnico a la audiencia y comunica riesgos temprano.

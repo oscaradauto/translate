@@ -3,3 +3,4 @@
 -r requirements-stage1.txt
 
 groq
+PyYAML
