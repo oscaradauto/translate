@@ -44,6 +44,8 @@ class LocalWhisperTranscriber:
         language: str | None = "en",
         initial_prompt: str | None = WHISPER_INITIAL_PROMPT,
         suppress_repetition_loops: bool = False,
+        partial_beam_size: int = 1,
+        final_beam_size: int = 1,
     ) -> None:
         self.on_partial = on_partial
         self.on_final = on_final
@@ -53,6 +55,8 @@ class LocalWhisperTranscriber:
         self.language = language
         self.initial_prompt = initial_prompt
         self.suppress_repetition_loops = suppress_repetition_loops
+        self.partial_beam_size = max(1, int(partial_beam_size))
+        self.final_beam_size = max(1, int(final_beam_size))
 
         self._model: WhisperModel | None = None
         self._executor: ThreadPoolExecutor | None = None
@@ -136,7 +140,11 @@ class LocalWhisperTranscriber:
                 self._partial_inflight.discard(key)
             return
 
-        future = executor.submit(self._transcribe, pcm16)
+        future = executor.submit(
+            self._transcribe,
+            pcm16,
+            self.partial_beam_size,
+        )
         future.add_done_callback(
             lambda f: self._finish_partial(key, source, segment_id, f)
         )
@@ -155,7 +163,11 @@ class LocalWhisperTranscriber:
             self._finalizing.add(key)
             self._partial_pending.pop(key, None)
 
-        future = self._executor.submit(self._transcribe, pcm16)
+        future = self._executor.submit(
+            self._transcribe,
+            pcm16,
+            self.final_beam_size,
+        )
         future.add_done_callback(
             lambda f: self._finish_final(source, segment_id, f)
         )
@@ -177,7 +189,11 @@ class LocalWhisperTranscriber:
 
         self._model = None
 
-    def _transcribe(self, pcm16: bytes) -> str:
+    def _transcribe(
+        self,
+        pcm16: bytes,
+        beam_size: int = 1,
+    ) -> str:
         model = self._model
         if model is None:
             return ""
@@ -194,7 +210,7 @@ class LocalWhisperTranscriber:
         segments, _ = model.transcribe(
             audio,
             language=self.language,
-            beam_size=1,
+            beam_size=max(1, int(beam_size)),
             best_of=1,
             temperature=0.0,
             vad_filter=False,
