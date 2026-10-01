@@ -483,6 +483,7 @@ class SubtitleTab(QWidget):
             MEETING_SUBTITLE_SPEECH_END_MS,
             MIC_SUBTITLE_MAX_UTTERANCE_SECONDS,
             MIC_SUBTITLE_SPEECH_END_MS,
+            STAGE1_WHISPER_FINAL_BEAM_SIZE,
         )
         from vad_detector import ListenerController
 
@@ -497,6 +498,8 @@ class SubtitleTab(QWidget):
                 MEETING_SUBTITLE_MAX_UTTERANCE_SECONDS
             ),
             suppress_repetition_loops=True,
+            partial_beam_size=1,
+            final_beam_size=STAGE1_WHISPER_FINAL_BEAM_SIZE,
         )
 
         threading.Thread(
