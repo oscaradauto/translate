@@ -590,6 +590,8 @@ class ListenerController:
         mic_max_utterance_seconds: float | None = None,
         meeting_max_utterance_seconds: float | None = None,
         suppress_repetition_loops: bool = False,
+        partial_beam_size: int = 1,
+        final_beam_size: int = 1,
     ):
         self.callbacks = callbacks
         self.mic_device = mic_device
@@ -622,6 +624,8 @@ class ListenerController:
             else meeting_max_utterance_seconds
         )
         self.suppress_repetition_loops = suppress_repetition_loops
+        self.partial_beam_size = max(1, int(partial_beam_size))
+        self.final_beam_size = max(1, int(final_beam_size))
 
         self.running = False
         self.mic_streamer: LocalMicStreamer | None = None
@@ -715,6 +719,8 @@ class ListenerController:
                     suppress_repetition_loops=(
                         self.suppress_repetition_loops
                     ),
+                    partial_beam_size=self.partial_beam_size,
+                    final_beam_size=self.final_beam_size,
                 )
 
             self.transcriber.start()
