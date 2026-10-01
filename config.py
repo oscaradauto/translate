@@ -62,7 +62,13 @@ MIC_SUBTITLE_MAX_UTTERANCE_SECONDS = float(
     os.getenv("MIC_SUBTITLE_MAX_UTTERANCE_SECONDS", "14")
 )
 MEETING_SUBTITLE_MAX_UTTERANCE_SECONDS = float(
-    os.getenv("MEETING_SUBTITLE_MAX_UTTERANCE_SECONDS", "12")
+    os.getenv("MEETING_SUBTITLE_MAX_UTTERANCE_SECONDS", "18")
+)
+
+# Keep live partial captions fast, but let the final pass spend a little more
+# search effort for technical terms once the utterance is complete.
+STAGE1_WHISPER_FINAL_BEAM_SIZE = int(
+    os.getenv("STAGE1_WHISPER_FINAL_BEAM_SIZE", "3")
 )
 
 # False-positive protection. The physical microphone is intentionally more
@@ -99,11 +105,14 @@ WHISPER_INITIAL_PROMPT = os.getenv(
         "Spring Boot, Kafka, Azure, Azure Functions, GraphQL, REST APIs, SDK, "
         "SDKs, API, APIs, GitHub, pull request, PR, repository, repositories, "
         "Jira, JQL, MXL, PDP, PLP, AEM, APAC, iOS, Android, DRY principle, "
-        "Tailwind, Tailwind CSS, Sass, SCSS, Lottie, SVG, Postman, Confluence, "
-        "MCP, serverless, coding agents, Q1, Q3, Q4, deployment, latency, "
-        "cold start, circuit breaker, timeout, cache validation, state "
-        "management, memory management, garbage collection, authentication, "
-        "OAuth, performance testing, load testing, schema, endpoint, getCart, "
+        "Tailwind, Tailwind CSS, Sass, SCSS, Lottie, SVG, Postman, Proxyman, "
+        "ServiceNow, HAR logs, CTASK, Confluence, MCP, serverless, coding agents, "
+        "Q1, Q3, Q4, deployment, latency, cold start, circuit breaker, circuit "
+        "breakers, acceptance criteria, story points, schema PR, refinement, "
+        "Kanban, OpenTelemetry, virtual threads, Java 21, application-level "
+        "executor, shared executor, feature flag, timeout, cache validation, "
+        "state management, memory management, garbage collection, authentication, "
+        "OAuth, performance testing, load testing, QA, schema, endpoint, getCart, "
         "observability and tracing."
     ),
 )
