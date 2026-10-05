@@ -28,6 +28,8 @@ FinalCallback = Callable[[str, str, int], None]
 StatusCallback = Callable[[str], None]
 ErrorCallback = Callable[[str, Exception], None]
 
+GROQ_STT_PROMPT_MAX_CHARS = 896
+
 
 class GroqSpeechTranscriber:
     """Final-utterance STT optimized for interview-question accuracy."""
@@ -147,10 +149,22 @@ class GroqSpeechTranscriber:
 
     def _prompt_for_language(self) -> str:
         if self.language == "es":
-            return GROQ_STT_PROMPT_ES.strip()
-        if self.language == "en":
-            return GROQ_STT_PROMPT_EN.strip()
-        return GROQ_STT_PROMPT_AUTO.strip()
+            prompt = GROQ_STT_PROMPT_ES.strip()
+        elif self.language == "en":
+            prompt = GROQ_STT_PROMPT_EN.strip()
+        else:
+            prompt = GROQ_STT_PROMPT_AUTO.strip()
+
+        # Groq Whisper rejects prompts longer than 896 characters. Keep a
+        # defensive bound here as well so an oversized .env override cannot
+        # break Stage 2 with an HTTP 400 response.
+        if len(prompt) <= GROQ_STT_PROMPT_MAX_CHARS:
+            return prompt
+
+        shortened = prompt[:GROQ_STT_PROMPT_MAX_CHARS]
+        if " " in shortened:
+            shortened = shortened.rsplit(" ", 1)[0]
+        return shortened.rstrip(" ,;:")
 
     @staticmethod
     def _to_wav(pcm16: bytes) -> bytes:
