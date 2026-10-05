@@ -352,7 +352,34 @@ class InterviewController:
 
     @staticmethod
     def _is_low_quality_transcript(text: str) -> bool:
-        """Reject obvious ASR loops before they pollute interview context."""
+        """Reject obvious ASR hallucinations before they pollute context."""
+        normalized = " ".join(
+            re.sub(
+                r"[^a-z0-9áéíóúüñ]+",
+                " ",
+                text.casefold(),
+            ).split()
+        )
+
+        # Whisper commonly emits these short courtesy/video phrases when a
+        # segment contains noise, silence, room audio, or indistinct speech.
+        # They carry no useful technical-interview context, so reject them
+        # before they reach the conversation history or contextualizer.
+        noise_phrases = {
+            "thank you",
+            "thank you very much",
+            "thank you so much",
+            "thanks",
+            "thanks a lot",
+            "thanks so much",
+            "thank you for watching",
+            "thanks for watching",
+            "thank you for listening",
+            "thanks for listening",
+        }
+        if normalized in noise_phrases:
+            return True
+
         tokens = [
             re.sub(r"[^a-z0-9áéíóúüñ]+", "", token.casefold())
             for token in text.split()
