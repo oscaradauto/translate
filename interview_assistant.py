@@ -140,7 +140,7 @@ Rules:
 - Preserve the speaker's intended meaning; do not invent a new question.
 - Correct obvious ASR mistakes only when phonetics plus context make the technical term reasonably clear.
 - Examples: "J W T" / "jay double u tee" -> JWT; "oh auth" -> OAuth; "spring butt" -> Spring Boot.
-- In a Spring annotation context, "autorail", "auto wired", or close phonetic variants should be reconstructed as @Autowired when that interpretation is reasonably clear.
+- In a Spring annotation context, "autorail", "autoride", "auto wired", or close phonetic variants should be reconstructed as @Autowired when that interpretation is reasonably clear.
 - In a resilience/microservices context, "secret breaker" or close phonetic variants should be reconstructed as Circuit Breaker when that interpretation is reasonably clear.
 - For very short Spanish technical questions where language detection corrupts the function words but preserves the technical term, recover the Spanish intent only when context supports it. Example: "che è Circuit Breaker" or "e Circuit Breaker" in an otherwise Spanish technical exchange can mean "¿Qué es Circuit Breaker?".
 - Do not IGNORE a short turn merely because only a few words were transcribed. If it contains a recognizable technical term and is plausibly a complete technical question, reconstruct and ANSWER it.
