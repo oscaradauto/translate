@@ -18,7 +18,9 @@ from groq import Groq
 
 from config import (
     GROQ_STT_MODEL,
-    GROQ_STT_PROMPT,
+    GROQ_STT_PROMPT_AUTO,
+    GROQ_STT_PROMPT_EN,
+    GROQ_STT_PROMPT_ES,
 )
 
 PartialCallback = Callable[[str, str, int], None]
@@ -131,7 +133,7 @@ class GroqSpeechTranscriber:
             "temperature": 0.0,
         }
 
-        prompt = GROQ_STT_PROMPT.strip()
+        prompt = self._prompt_for_language()
         if prompt:
             kwargs["prompt"] = prompt
 
@@ -142,6 +144,13 @@ class GroqSpeechTranscriber:
             **kwargs
         )
         return (transcription.text or "").strip()
+
+    def _prompt_for_language(self) -> str:
+        if self.language == "es":
+            return GROQ_STT_PROMPT_ES.strip()
+        if self.language == "en":
+            return GROQ_STT_PROMPT_EN.strip()
+        return GROQ_STT_PROMPT_AUTO.strip()
 
     @staticmethod
     def _to_wav(pcm16: bytes) -> bytes:
