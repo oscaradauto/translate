@@ -43,6 +43,7 @@ class InterviewController:
         mic_device: int = MIC_DEVICE_INDEX,
         language: str = "en",
         response_scope: str = ASSISTANT_RESPONSE_SCOPE,
+        transcription_language: str = INTERVIEW_TRANSCRIPTION_LANGUAGE,
     ) -> None:
         self.callbacks = callbacks
         self.mic_device = mic_device
@@ -51,6 +52,11 @@ class InterviewController:
             response_scope
             if response_scope in {"interviewer", "both"}
             else "interviewer"
+        )
+        self.transcription_language = (
+            transcription_language
+            if transcription_language in {"auto", "en", "es"}
+            else "auto"
         )
 
         self.listener: ListenerController | None = None
@@ -131,8 +137,8 @@ class InterviewController:
 
         transcription_language = (
             None
-            if INTERVIEW_TRANSCRIPTION_LANGUAGE == "auto"
-            else INTERVIEW_TRANSCRIPTION_LANGUAGE
+            if self.transcription_language == "auto"
+            else self.transcription_language
         )
 
         transcriber_factory = None
@@ -194,6 +200,20 @@ class InterviewController:
         if language in {"en", "es"}:
             self.language = language
             self._emit("on_language_changed", language)
+
+    def set_transcription_language(self, language: str) -> None:
+        if language not in {"auto", "en", "es"}:
+            return
+
+        self.transcription_language = language
+        resolved_language = None if language == "auto" else language
+
+        listener = self.listener
+        if listener is not None:
+            listener.transcription_language = resolved_language
+            transcriber = listener.transcriber
+            if transcriber is not None and hasattr(transcriber, "language"):
+                transcriber.language = resolved_language
 
     def set_response_scope(self, scope: str) -> None:
         if scope not in {"interviewer", "both"}:
