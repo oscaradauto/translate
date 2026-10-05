@@ -941,12 +941,33 @@ class AssistantTab(QWidget):
             "Hidden está seleccionado y se aplicará al iniciar Stage 2."
         )
 
-        input_label = QLabel("Input: Auto")
-        input_label.setToolTip(
-            "Stage 2 detects English or Spanish independently for each turn."
+        self.input_language_combo = QComboBox()
+        self.input_language_combo.addItem("Auto", "auto")
+        self.input_language_combo.addItem("English", "en")
+        self.input_language_combo.addItem("Español", "es")
+        self.input_language_combo.setMinimumWidth(105)
+        self.input_language_combo.setToolTip(
+            "Auto detecta el idioma por turno. English fuerza inglés. "
+            "Español fuerza español manteniendo términos técnicos en inglés."
         )
-        input_label.setStyleSheet(
-            f"color: {MUTED}; font-size: 11px; background: transparent;"
+        self.input_language_combo.setStyleSheet(
+            f"""
+            QComboBox {{
+                background-color: rgba(255,255,255,15);
+                color: {TEXT};
+                border: 1px solid rgba(255,255,255,25);
+                border-radius: 8px;
+                padding: 5px 9px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {CARD_BG_SOFT};
+                color: {TEXT};
+                selection-background-color: {BLUE};
+            }}
+            """
+        )
+        self.input_language_combo.currentIndexChanged.connect(
+            self._on_input_language_changed
         )
 
         response_scope_label = QLabel("Responder a:")
@@ -1210,6 +1231,12 @@ class AssistantTab(QWidget):
                 "interviewer",
             )
         )
+        input_language = str(
+            self._settings.value(
+                "stage2/input_language",
+                "auto",
+            )
+        )
         answer_language = str(
             self._settings.value(
                 "stage2/answer_language",
@@ -1226,6 +1253,10 @@ class AssistantTab(QWidget):
         self._select_combo_data(
             self.response_scope_combo,
             response_scope,
+        )
+        self._select_combo_data(
+            self.input_language_combo,
+            input_language,
         )
         self._select_combo_data(
             self.language_combo,
@@ -1652,6 +1683,10 @@ class AssistantTab(QWidget):
         from interview_controller import InterviewController
 
         language = self.language_combo.currentData() or "en"
+        transcription_language = (
+            self.input_language_combo.currentData()
+            or "auto"
+        )
         response_scope = (
             self.response_scope_combo.currentData()
             or "interviewer"
@@ -1660,6 +1695,7 @@ class AssistantTab(QWidget):
             callbacks=callbacks,
             language=language,
             response_scope=response_scope,
+            transcription_language=transcription_language,
         )
 
         threading.Thread(
@@ -1728,6 +1764,14 @@ class AssistantTab(QWidget):
         self.copy_conversation_button.setEnabled(False)
         self.copy_question_button.setEnabled(False)
         self.copy_answer_button.setEnabled(False)
+
+    def _on_input_language_changed(self, _index: int = -1) -> None:
+        language = self.input_language_combo.currentData() or "auto"
+        self._persist_setting("input_language", language)
+
+        controller = self.controller
+        if controller is not None:
+            controller.set_transcription_language(language)
 
     def _on_language_changed(self, _index: int = -1) -> None:
         language = self.language_combo.currentData() or "en"
@@ -2704,14 +2748,7 @@ class SettingsTab(QWidget):
 
         input_row = QHBoxLayout()
         input_row.addWidget(self._row_label("Input language"))
-        input_value = QLabel("Auto · English / Español")
-        input_value.setStyleSheet(
-            f"color: {TEXT}; font-size: 11px; background: transparent;"
-        )
-        input_value.setToolTip(
-            "Stage 2 detecta inglés o español de forma independiente por turno."
-        )
-        input_row.addWidget(input_value)
+        input_row.addWidget(self.assistant_tab.input_language_combo)
         input_row.addStretch()
         interview.addLayout(input_row)
 
