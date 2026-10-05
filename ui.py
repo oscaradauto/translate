@@ -2863,7 +2863,7 @@ class MainWindow(QWidget):
         self._build_ui()
 
     def _build_window(self) -> None:
-        self.setWindowTitle("Meeting Assistant")
+        self.setWindowTitle("Meeting Assistant V1.0")
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -2905,7 +2905,7 @@ class MainWindow(QWidget):
         title_bar.setContentsMargins(18, 10, 10, 4)
         title_bar.setSpacing(8)
 
-        app_title = QLabel("Meeting Assistant")
+        app_title = QLabel("Meeting Assistant V1.0")
         app_title.setStyleSheet(
             f"color: {TEXT}; font-size: 13px; font-weight: 750;"
         )
