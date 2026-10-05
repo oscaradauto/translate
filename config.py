@@ -183,46 +183,45 @@ GROQ_STT_PROMPT = os.getenv(
 GROQ_STT_PROMPT_AUTO = os.getenv(
     "GROQ_STT_PROMPT_AUTO",
     (
-        "Software-engineering interview. The speaker may use English, Spanish, "
-        "or Spanish sentences containing English technical terminology. "
-        "Preserve established technical terms and acronyms in their canonical "
-        "English spelling when clearly spoken. Do not convert the surrounding "
-        "sentence to another language merely because it contains English "
-        "technical terms. "
-        + GROQ_STT_PROMPT
+        "Software engineering interview in English or Spanish. Spanish "
+        "questions may include English technical terms. Preserve canonical "
+        "technical spelling and acronyms; do not switch the surrounding "
+        "sentence to another language because of technical words. Key terms: "
+        "AWS, Azure, Java, Spring Boot, @Autowired, @Repository, JWT, OAuth, "
+        "Circuit Breaker, Garbage Collector, Lambda, HashMap, ConcurrentHashMap, "
+        "Kafka, GraphQL, REST API, Docker, Kubernetes, CI/CD, Java Streams, "
+        "Optional."
     ),
 )
 
 GROQ_STT_PROMPT_EN = os.getenv(
     "GROQ_STT_PROMPT_EN",
     (
-        "The primary spoken language is English. This is a technical software "
-        "engineering interview. Transcribe the sentence in English and preserve "
-        "canonical technical spelling for terms such as AWS, Azure, Java, "
-        "Spring Boot, @Autowired, @Repository, JWT, OAuth, Circuit Breaker, "
-        "Garbage Collector, Lambda, HashMap, ConcurrentHashMap, Kafka, GraphQL, "
-        "REST API, Docker, Kubernetes, CI/CD, Java Streams, and Optional. "
-        "Do not phonetically rewrite established technical terms. "
-        + GROQ_STT_PROMPT
+        "Primary spoken language: English. Technical software interview. "
+        "Transcribe natural English and preserve canonical technical spelling. "
+        "Key terms: AWS, Azure, Java, Spring Boot, @Autowired, @Repository, JWT, "
+        "OAuth, Circuit Breaker, Garbage Collector, Lambda, HashMap, "
+        "ConcurrentHashMap, Kafka, GraphQL, REST API, Docker, Kubernetes, "
+        "CI/CD, Java Streams, Optional, JPA, JVM, Redis, MongoDB, SOLID. "
+        "Do not phonetically rewrite established technical terms."
     ),
 )
 
 GROQ_STT_PROMPT_ES = os.getenv(
     "GROQ_STT_PROMPT_ES",
     (
-        "El idioma principal hablado es español. Esta es una entrevista técnica "
-        "de software. La gramática y las palabras funcionales de la oración son "
-        "españolas, pero los términos técnicos se pronuncian con frecuencia en "
-        "inglés. Mantén esos términos con su escritura técnica canónica en inglés "
-        "y no cambies la oración completa a inglés, italiano u otro idioma solo "
-        "por escucharlos. Ejemplos de términos que deben conservarse: AWS, Azure, "
-        "Java, Spring Boot, @Autowired, @Repository, JWT, OAuth, Circuit Breaker, "
-        "Garbage Collector, Lambda, HashMap, ConcurrentHashMap, Kafka, GraphQL, "
-        "REST API, Docker, Kubernetes, CI/CD, Java Streams y Optional. "
-        "No traduzcas ni reescribas fonéticamente términos técnicos establecidos. "
-        + GROQ_STT_PROMPT
+        "Idioma principal: español. Entrevista técnica de software. Transcribe "
+        "la estructura de la oración en español, pero conserva en inglés la "
+        "escritura canónica de términos técnicos pronunciados en inglés. No "
+        "cambies toda la frase a inglés, italiano u otro idioma por esos "
+        "términos. Términos clave: AWS, Azure, Java, Spring Boot, @Autowired, "
+        "@Repository, JWT, OAuth, Circuit Breaker, Garbage Collector, Lambda, "
+        "HashMap, ConcurrentHashMap, Kafka, GraphQL, REST API, Docker, "
+        "Kubernetes, CI/CD, Java Streams, Optional, JPA, JVM, Redis, MongoDB, "
+        "SOLID."
     ),
 )
+
 INTERVIEW_WHISPER_INITIAL_PROMPT = os.getenv(
     "INTERVIEW_WHISPER_INITIAL_PROMPT",
     GROQ_STT_PROMPT,
