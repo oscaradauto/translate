@@ -53,7 +53,7 @@ SUBTITLE_MAX_UTTERANCE_SECONDS = float(
 # real pause exists. Longer hard caps reduce arbitrary 8-second sentence cuts
 # while rolling partial captions remain available in real time.
 MIC_SUBTITLE_SPEECH_END_MS = int(
-    os.getenv("MIC_SUBTITLE_SPEECH_END_MS", "950")
+    os.getenv("MIC_SUBTITLE_SPEECH_END_MS", "1200")
 )
 MEETING_SUBTITLE_SPEECH_END_MS = int(
     os.getenv("MEETING_SUBTITLE_SPEECH_END_MS", "700")
@@ -109,9 +109,16 @@ WHISPER_INITIAL_PROMPT = os.getenv(
         "ServiceNow, HAR logs, CTASK, Confluence, MCP, serverless, coding agents, "
         "Q1, Q3, Q4, deployment, latency, cold start, circuit breaker, circuit "
         "breakers, acceptance criteria, story points, schema PR, refinement, "
-        "Kanban, OpenTelemetry, virtual threads, Java 21, application-level "
-        "executor, shared executor, feature flag, timeout, cache validation, "
-        "state management, memory management, garbage collection, authentication, "
+        "Kanban, OpenTelemetry, New Relic, Application Insights, App Insights, "
+        "ContentSquare, Klarna, Afterpay, Azure Function Apps, virtual threads, "
+        "Java 21, application-level executor, shared executor, feature flag, "
+        "trace ID, operation key, dependency key, downstream service, telemetry, "
+        "instrumentation, P50, P95, P99, conversion rate, checkout completion, "
+        "access token, refresh token, high-priority, priority, Jira links, "
+        "ticket links, blocked by, depends on, code freeze, mobile regression, "
+        "production release, cart API, wallet info API, dev environment, "
+        "live traffic, release regression, timeout, cache validation, state "
+        "management, memory management, garbage collection, authentication, "
         "OAuth, performance testing, load testing, QA, schema, endpoint, getCart, "
         "observability and tracing."
     ),
