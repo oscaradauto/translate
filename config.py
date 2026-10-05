@@ -161,12 +161,18 @@ GROQ_STT_MODEL = os.getenv(
 GROQ_STT_PROMPT = os.getenv(
     "GROQ_STT_PROMPT",
     (
-        "Java, JVM, JPA, Spring Boot, dependency injection, JWT, OAuth, "
-        "OAuth2, OIDC, authentication, authorization, HTTP, REST, GET, "
-        "POST, PUT, PATCH, DELETE, Spring MVC, RestController, GetMapping, "
-        "PostMapping, PutMapping, PatchMapping, DeleteMapping, Kafka, "
-        "microservices, GraphQL, SQL, NoSQL, MongoDB, Redis, Azure, AWS, "
-        "Docker, Kubernetes, CI/CD, SOLID, heap, stack, garbage collection."
+        "Technical software interview in English or Spanish. Questions may "
+        "mix Spanish with English programming terminology. Java, JVM, JPA, "
+        "Spring Boot, dependency injection, @Autowired, Autowired, JWT, OAuth, "
+        "OAuth2, OIDC, authentication, authorization, HTTP, REST, GET, POST, "
+        "PUT, PATCH, DELETE, Spring MVC, RestController, GetMapping, "
+        "PostMapping, PutMapping, PatchMapping, DeleteMapping, Circuit Breaker, "
+        "Resilience4j, Kafka, microservices, GraphQL, SQL, NoSQL, MongoDB, "
+        "Redis, Azure, AWS, Docker, Kubernetes, CI/CD, SOLID, Java Streams, "
+        "Stream, Collectors, distinct, ArrayList, List, List<Integer>, "
+        "Collection, Set, HashSet, HashMap, int[], Integer[], array, anagram, "
+        "isAnagram, getDuplicate, duplicates, duplicate elements, LocalDate, "
+        "Period, heap, stack, garbage collection."
     ),
 )
 INTERVIEW_WHISPER_INITIAL_PROMPT = os.getenv(
