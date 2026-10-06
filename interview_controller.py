@@ -707,6 +707,18 @@ class InterviewController:
         if not question or not self.running:
             return
 
+        if (
+            not force
+            and candidate is not None
+            and self._candidate_is_stale(candidate)
+        ):
+            self._diag(
+                "queued_analysis_stale",
+                assembly=candidate.assembly_id,
+                revision=candidate.revision,
+            )
+            return
+
         self._start_answer(
             question,
             force=force,
