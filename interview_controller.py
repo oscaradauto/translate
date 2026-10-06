@@ -1021,6 +1021,7 @@ class InterviewController:
                         if analysis.interview_type == "coding"
                         else None
                     ),
+                    assembled_turn=question,
                 )
 
                 generated_answer = (
