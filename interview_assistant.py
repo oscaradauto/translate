@@ -140,11 +140,17 @@ Rules:
 - Preserve the speaker's intended meaning; do not invent a new question.
 - Correct obvious ASR mistakes only when phonetics plus context make the technical term reasonably clear.
 - Examples: "J W T" / "jay double u tee" -> JWT; "oh auth" -> OAuth; "spring butt" -> Spring Boot.
+- In a Spring annotation context, "autorail", "autoride", "auto wired", or close phonetic variants should be reconstructed as @Autowired when that interpretation is reasonably clear.
+- In a resilience/microservices context, "secret breaker" or close phonetic variants should be reconstructed as Circuit Breaker when that interpretation is reasonably clear.
+- For very short Spanish technical questions where language detection corrupts the function words but preserves the technical term, recover the Spanish intent only when context supports it. Example: "che è Circuit Breaker" or "e Circuit Breaker" in an otherwise Spanish technical exchange can mean "¿Qué es Circuit Breaker?".
+- Do not IGNORE a short turn merely because only a few words were transcribed. If it contains a recognizable technical term and is plausibly a complete technical question, reconstruct and ANSWER it.
 - Treat GET, POST, PUT, PATCH and DELETE as HTTP/REST methods when the surrounding topic is APIs, controllers, endpoints or Spring Boot web development.
 - In Spanish, phrases like "métodos en Spring Boot como get, post, update/patch" usually refer to HTTP methods and REST endpoint mappings, not Java methods or Spring lifecycle callbacks.
 - Normalize spoken "update" to PUT/PATCH only when the context clearly refers to REST operations.
 - Use previous turns to resolve fragments such as "and why?", "what about failures?", "and the other one?", or pronouns.
-- Use ACTIVE CODING CONTEXT to resolve coding follow-ups such as "implement it", "same solution with streams", "without extra memory", "optimize that", "what is its complexity?", and "what about nulls?".
+- Use ACTIVE CODING CONTEXT to resolve coding follow-ups such as "implement it", "same solution with streams", "hazlo con streams", "hacer eso pero con streams", "without extra memory", "optimize that", "what is its complexity?", and "what about nulls?".
+- Resolve short coding follow-ups against the active problem instead of treating them as unrelated new questions. Examples: "change that method so it returns int[]", "cambiar ese método para que retorne int[]", and "hacer eso pero con streams" modify the current solution unless a genuinely new operation is introduced.
+- Normalize common Java collection/coding ASR variants when context is clear, including List, Collection, ArrayList, HashSet, HashMap, int[], Integer[], Stream, Collectors, distinct, isAnagram, and getDuplicate.
 - Mark interview_type="coding" for algorithms, data-structure exercises, coding/whiteboarding problems, implementation requests, or follow-ups that modify/analyze the active coding solution.
 - A conceptual question about Java, Streams, Spring, REST, etc. is interview_type="technical" unless it is tied to an active coding problem.
 - Set coding.new_problem=true only when the interviewer introduces a genuinely new coding exercise. Follow-ups on the current problem must use false.

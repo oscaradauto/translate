@@ -53,7 +53,7 @@ SUBTITLE_MAX_UTTERANCE_SECONDS = float(
 # real pause exists. Longer hard caps reduce arbitrary 8-second sentence cuts
 # while rolling partial captions remain available in real time.
 MIC_SUBTITLE_SPEECH_END_MS = int(
-    os.getenv("MIC_SUBTITLE_SPEECH_END_MS", "950")
+    os.getenv("MIC_SUBTITLE_SPEECH_END_MS", "1200")
 )
 MEETING_SUBTITLE_SPEECH_END_MS = int(
     os.getenv("MEETING_SUBTITLE_SPEECH_END_MS", "700")
@@ -62,7 +62,13 @@ MIC_SUBTITLE_MAX_UTTERANCE_SECONDS = float(
     os.getenv("MIC_SUBTITLE_MAX_UTTERANCE_SECONDS", "14")
 )
 MEETING_SUBTITLE_MAX_UTTERANCE_SECONDS = float(
-    os.getenv("MEETING_SUBTITLE_MAX_UTTERANCE_SECONDS", "12")
+    os.getenv("MEETING_SUBTITLE_MAX_UTTERANCE_SECONDS", "18")
+)
+
+# Keep live partial captions fast, but let the final pass spend a little more
+# search effort for technical terms once the utterance is complete.
+STAGE1_WHISPER_FINAL_BEAM_SIZE = int(
+    os.getenv("STAGE1_WHISPER_FINAL_BEAM_SIZE", "3")
 )
 
 # False-positive protection. The physical microphone is intentionally more
@@ -99,11 +105,21 @@ WHISPER_INITIAL_PROMPT = os.getenv(
         "Spring Boot, Kafka, Azure, Azure Functions, GraphQL, REST APIs, SDK, "
         "SDKs, API, APIs, GitHub, pull request, PR, repository, repositories, "
         "Jira, JQL, MXL, PDP, PLP, AEM, APAC, iOS, Android, DRY principle, "
-        "Tailwind, Tailwind CSS, Sass, SCSS, Lottie, SVG, Postman, Confluence, "
-        "MCP, serverless, coding agents, Q1, Q3, Q4, deployment, latency, "
-        "cold start, circuit breaker, timeout, cache validation, state "
+        "Tailwind, Tailwind CSS, Sass, SCSS, Lottie, SVG, Postman, Proxyman, "
+        "ServiceNow, HAR logs, CTASK, Confluence, MCP, serverless, coding agents, "
+        "Q1, Q3, Q4, deployment, latency, cold start, circuit breaker, circuit "
+        "breakers, acceptance criteria, story points, schema PR, refinement, "
+        "Kanban, OpenTelemetry, New Relic, Application Insights, App Insights, "
+        "ContentSquare, Klarna, Afterpay, Azure Function Apps, virtual threads, "
+        "Java 21, application-level executor, shared executor, feature flag, "
+        "trace ID, operation key, dependency key, downstream service, telemetry, "
+        "instrumentation, P50, P95, P99, conversion rate, checkout completion, "
+        "access token, refresh token, high-priority, priority, Jira links, "
+        "ticket links, blocked by, depends on, code freeze, mobile regression, "
+        "production release, cart API, wallet info API, dev environment, "
+        "live traffic, release regression, timeout, cache validation, state "
         "management, memory management, garbage collection, authentication, "
-        "OAuth, performance testing, load testing, schema, endpoint, getCart, "
+        "OAuth, performance testing, load testing, QA, schema, endpoint, getCart, "
         "observability and tracing."
     ),
 )
@@ -145,14 +161,67 @@ GROQ_STT_MODEL = os.getenv(
 GROQ_STT_PROMPT = os.getenv(
     "GROQ_STT_PROMPT",
     (
-        "Java, JVM, JPA, Spring Boot, dependency injection, JWT, OAuth, "
-        "OAuth2, OIDC, authentication, authorization, HTTP, REST, GET, "
-        "POST, PUT, PATCH, DELETE, Spring MVC, RestController, GetMapping, "
-        "PostMapping, PutMapping, PatchMapping, DeleteMapping, Kafka, "
-        "microservices, GraphQL, SQL, NoSQL, MongoDB, Redis, Azure, AWS, "
-        "Docker, Kubernetes, CI/CD, SOLID, heap, stack, garbage collection."
+        "Technical software interview in English or Spanish. Questions may "
+        "mix Spanish with English programming terminology. Java, JVM, JPA, "
+        "Spring Boot, dependency injection, @Autowired, Autowired, JWT, OAuth, "
+        "OAuth2, OIDC, authentication, authorization, HTTP, REST, GET, POST, "
+        "PUT, PATCH, DELETE, Spring MVC, RestController, GetMapping, "
+        "PostMapping, PutMapping, PatchMapping, DeleteMapping, Circuit Breaker, "
+        "Resilience4j, Kafka, microservices, GraphQL, SQL, NoSQL, MongoDB, "
+        "Redis, Azure, AWS, Docker, Kubernetes, CI/CD, SOLID, Java Streams, "
+        "Stream, Collectors, distinct, ArrayList, List, List<Integer>, "
+        "Collection, Set, HashSet, HashMap, int[], Integer[], array, anagram, "
+        "isAnagram, getDuplicate, duplicates, duplicate elements, LocalDate, "
+        "Period, heap, stack, garbage collection."
     ),
 )
+
+# Stage 2 language-aware Whisper prompts. The base vocabulary above remains
+# reusable and can still be overridden with GROQ_STT_PROMPT. These wrappers
+# describe how natural-language grammar and English technical vocabulary mix
+# in real software-engineering interviews.
+GROQ_STT_PROMPT_AUTO = os.getenv(
+    "GROQ_STT_PROMPT_AUTO",
+    (
+        "Software engineering interview in English or Spanish. Spanish "
+        "questions may include English technical terms. Preserve canonical "
+        "technical spelling and acronyms; do not switch the surrounding "
+        "sentence to another language because of technical words. Key terms: "
+        "AWS, Azure, Java, Spring Boot, @Autowired, @Repository, JWT, OAuth, "
+        "Circuit Breaker, Garbage Collector, Lambda, HashMap, ConcurrentHashMap, "
+        "Kafka, GraphQL, REST API, Docker, Kubernetes, CI/CD, Java Streams, "
+        "Optional."
+    ),
+)
+
+GROQ_STT_PROMPT_EN = os.getenv(
+    "GROQ_STT_PROMPT_EN",
+    (
+        "Primary spoken language: English. Technical software interview. "
+        "Transcribe natural English and preserve canonical technical spelling. "
+        "Key terms: AWS, Azure, Java, Spring Boot, @Autowired, @Repository, JWT, "
+        "OAuth, Circuit Breaker, Garbage Collector, Lambda, HashMap, "
+        "ConcurrentHashMap, Kafka, GraphQL, REST API, Docker, Kubernetes, "
+        "CI/CD, Java Streams, Optional, JPA, JVM, Redis, MongoDB, SOLID. "
+        "Do not phonetically rewrite established technical terms."
+    ),
+)
+
+GROQ_STT_PROMPT_ES = os.getenv(
+    "GROQ_STT_PROMPT_ES",
+    (
+        "Idioma principal: español. Entrevista técnica de software. Transcribe "
+        "la estructura de la oración en español, pero conserva en inglés la "
+        "escritura canónica de términos técnicos pronunciados en inglés. No "
+        "cambies toda la frase a inglés, italiano u otro idioma por esos "
+        "términos. Términos clave: AWS, Azure, Java, Spring Boot, @Autowired, "
+        "@Repository, JWT, OAuth, Circuit Breaker, Garbage Collector, Lambda, "
+        "HashMap, ConcurrentHashMap, Kafka, GraphQL, REST API, Docker, "
+        "Kubernetes, CI/CD, Java Streams, Optional, JPA, JVM, Redis, MongoDB, "
+        "SOLID."
+    ),
+)
+
 INTERVIEW_WHISPER_INITIAL_PROMPT = os.getenv(
     "INTERVIEW_WHISPER_INITIAL_PROMPT",
     GROQ_STT_PROMPT,
