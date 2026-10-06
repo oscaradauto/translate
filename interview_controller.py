@@ -33,6 +33,7 @@ from interview_assistant import (
     GroqInterviewAssistant,
 )
 from groq_health import describe_groq_error
+from question_assembler import QuestionAssembler, QuestionCandidate
 from vad_detector import ListenerController
 
 
@@ -66,8 +67,7 @@ class InterviewController:
         self._turns: deque[ConversationTurn] = deque(
             maxlen=max(4, INTERVIEW_CONTEXT_TURNS)
         )
-        self._pending_response_parts: list[str] = []
-        self._pending_response_speaker = ""
+        self._question_assembler = QuestionAssembler()
         self._pending_lock = threading.Lock()
         self._question_timer: threading.Timer | None = None
 
@@ -75,6 +75,7 @@ class InterviewController:
         self._queued_answer_text = ""
         self._queued_answer_speaker = ""
         self._queued_answer_force = False
+        self._queued_answer_candidate: QuestionCandidate | None = None
         self._last_interviewer_text = ""
         self._last_turn_text = ""
         self._last_turn_speaker = ""
@@ -84,8 +85,6 @@ class InterviewController:
             language=INTERVIEW_CODE_LANGUAGE
         )
         self._topic_memory = ""
-        self._deferred_response_text = ""
-        self._deferred_response_speaker = ""
 
     @staticmethod
     def _diag(event: str, **fields) -> None:
@@ -111,8 +110,7 @@ class InterviewController:
 
         self.running = True
         self._turns.clear()
-        self._pending_response_parts.clear()
-        self._pending_response_speaker = ""
+        self._question_assembler.clear()
         self._last_interviewer_text = ""
         self._last_turn_text = ""
         self._last_turn_speaker = ""
@@ -121,12 +119,11 @@ class InterviewController:
         self._queued_answer_text = ""
         self._queued_answer_speaker = ""
         self._queued_answer_force = False
+        self._queued_answer_candidate = None
         self._coding_context = CodingContext(
             language=INTERVIEW_CODE_LANGUAGE
         )
         self._topic_memory = ""
-        self._deferred_response_text = ""
-        self._deferred_response_speaker = ""
 
         callbacks = {
             "on_status": self._on_listener_status,
@@ -179,11 +176,11 @@ class InterviewController:
         with self._pending_lock:
             timer = self._question_timer
             self._question_timer = None
-            self._pending_response_parts.clear()
-            self._pending_response_speaker = ""
+            self._question_assembler.clear()
             self._queued_answer_text = ""
             self._queued_answer_speaker = ""
             self._queued_answer_force = False
+            self._queued_answer_candidate = None
 
         if timer is not None:
             timer.cancel()
@@ -222,20 +219,25 @@ class InterviewController:
         self.response_scope = scope
 
         # If the user switches back to interviewer-only mode while a local
-        # YOU turn is waiting for analysis, discard that pending trigger. The
-        # transcript itself remains in context.
+        # YOU turn is being assembled, discard that pending trigger. The
+        # transcript itself remains in the conversation history.
         if scope == "interviewer":
             with self._pending_lock:
-                if self._pending_response_speaker == "YOU":
+                candidate = self._question_assembler.snapshot()
+                if candidate is not None and candidate.speaker == "YOU":
                     if self._question_timer is not None:
                         self._question_timer.cancel()
                     self._question_timer = None
-                    self._pending_response_parts.clear()
-                    self._pending_response_speaker = ""
+                    self._question_assembler.clear()
 
-                if self._deferred_response_speaker == "YOU":
-                    self._deferred_response_text = ""
-                    self._deferred_response_speaker = ""
+                if (
+                    self._queued_answer_candidate is not None
+                    and self._queued_answer_candidate.speaker == "YOU"
+                ):
+                    self._queued_answer_text = ""
+                    self._queued_answer_speaker = ""
+                    self._queued_answer_force = False
+                    self._queued_answer_candidate = None
 
         self._emit("on_response_scope_changed", scope)
 
