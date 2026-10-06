@@ -119,6 +119,8 @@ The speech transcript can contain recognition mistakes, especially technical ter
 
 Your job is to understand the latest raw turn USING the recent conversation, current topic memory, and ACTIVE CODING CONTEXT.
 
+IMPORTANT: the latest raw turn may already be an assembly of several consecutive STT final segments from the SAME conversational turn. Treat that assembled text as one evolving interviewer turn, not as independent questions sentence by sentence.
+
 Return ONLY valid JSON with this exact shape:
 {
   "action": "ANSWER" | "IGNORE" | "WAIT",
@@ -138,6 +140,12 @@ Return ONLY valid JSON with this exact shape:
 
 Rules:
 - Preserve the speaker's intended meaning; do not invent a new question.
+- For a long conversational turn, separate setup/background from the concrete ask. Return in "question" the concise question or request that the interviewee actually needs to answer, while preserving all relevant requested parts.
+- If the turn contains closely related subquestions about the same topic, combine them into one concise reconstructed question instead of treating every sentence as a separate question.
+- Technical setup is NOT automatically IGNORE. If the speaker is explaining context, requirements, role expectations, constraints, examples, or background that appears to be leading into a technical/coding question, use WAIT until the concrete ask is present.
+- Examples that should usually WAIT when they are still setup: "For this Java role memory management is important...", "I want to see if you know Java 21 and garbage collection...", "Based on this I want you to tell me how...".
+- Use ANSWER only when the assembled turn now contains a concrete technical/coding question or request that can be answered without guessing what the speaker will ask next.
+- Use IGNORE only when the assembled turn is clearly complete and non-actionable for this technical assistant, such as finished small talk, scheduling, salary, or unrelated conversation. If technical setup may still lead to a question, prefer WAIT over IGNORE.
 - Correct obvious ASR mistakes only when phonetics plus context make the technical term reasonably clear.
 - Examples: "J W T" / "jay double u tee" -> JWT; "oh auth" -> OAuth; "spring butt" -> Spring Boot.
 - In a Spring annotation context, "autorail", "autoride", "auto wired", or close phonetic variants should be reconstructed as @Autowired when that interpretation is reasonably clear.
@@ -162,7 +170,7 @@ Rules:
 - Explicit implementation requests must not be ignored. Examples: "write a Java method that...", "implement a function to...", "haz un método en Java que...", "crea una función que...", "escribe código para...".
 - If an explicit implementation request contains a concrete operation (for example convert, return, find, sort, validate, calculate, convertir, devolver, buscar, ordenar, validar, calcular), classify it as interview_type="coding", coding.request="implementation", and action="ANSWER" unless the utterance is genuinely incomplete.
 - If an explicit self-contained implementation request describes a different operation/input/output than the ACTIVE CODING CONTEXT, set coding.new_problem=true and put that full new problem in coding.problem.
-- WAIT when the latest turn sounds incomplete and more speech is likely needed.
+- WAIT when the latest assembled turn sounds incomplete, ends in setup rather than an ask, or more speech is likely needed. WAIT means keep the entire accumulated conversational turn for the next revision; do not treat the next segment as an unrelated question.
 - A technical/coding question may be in English, Spanish, or mixed.
 - The reconstructed question should remain in the language in which the question was most likely asked.
 - If uncertain about a corrupted technical term, keep the raw wording rather than confidently inventing a replacement.
