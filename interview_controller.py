@@ -243,8 +243,24 @@ class InterviewController:
 
     def answer_last_interviewer_turn(self) -> None:
         """Manually answer the latest turn allowed by the response scope."""
+        with self._pending_lock:
+            pending_candidate = self._question_assembler.snapshot()
+
+        candidate: QuestionCandidate | None = None
+        speaker = ""
+
         if self.response_scope == "interviewer":
-            question = self._last_interviewer_text.strip()
+            if (
+                pending_candidate is not None
+                and pending_candidate.speaker == "INTERVIEWER"
+            ):
+                candidate = pending_candidate
+                question = pending_candidate.text
+                speaker = "INTERVIEWER"
+            else:
+                question = self._last_interviewer_text.strip()
+                speaker = "INTERVIEWER"
+
             if not question:
                 self._emit(
                     "on_assistant_error",
@@ -252,7 +268,14 @@ class InterviewController:
                 )
                 return
         else:
-            question = self._last_turn_text.strip()
+            if pending_candidate is not None:
+                candidate = pending_candidate
+                question = pending_candidate.text
+                speaker = pending_candidate.speaker
+            else:
+                question = self._last_turn_text.strip()
+                speaker = self._last_turn_speaker
+
             if not question:
                 self._emit(
                     "on_assistant_error",
@@ -260,7 +283,12 @@ class InterviewController:
                 )
                 return
 
-        self._start_answer(question, force=True)
+        self._start_answer(
+            question,
+            force=True,
+            speaker=speaker,
+            candidate=candidate,
+        )
 
     def regenerate(self) -> None:
         question = self._last_question.strip()
@@ -971,6 +999,17 @@ class InterviewController:
                         phase="claim",
                     )
                     self._emit("on_question_waiting", reconstructed)
+                    return
+            elif candidate is not None:
+                # Manual "Responder último" may target a still-open assembly.
+                # Consume the exact snapshot so the same turn is not answered
+                # again automatically after the manual response.
+                if not self._claim_candidate(candidate):
+                    self._diag(
+                        "manual_candidate_stale",
+                        assembly=candidate.assembly_id,
+                        revision=candidate.revision,
+                    )
                     return
 
             coding_context = self._update_coding_context(
