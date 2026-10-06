@@ -525,6 +525,7 @@ class GroqInterviewAssistant:
         topic_memory: str = "",
         interview_type: str = "technical",
         coding_context: CodingContext | None = None,
+        assembled_turn: str = "",
     ) -> str:
         is_coding = interview_type == "coding"
 
@@ -590,7 +591,22 @@ class GroqInterviewAssistant:
         user_content = (
             f"Current interview topic:\n{topic_memory or '(unknown)'}\n\n"
             f"Recent interview conversation:\n{context or '(none)'}\n\n"
-            f"Contextually reconstructed interviewer question:\n{question}\n\n"
+        )
+
+        assembled_turn = " ".join(assembled_turn.strip().split())
+        normalized_question = " ".join(question.strip().split())
+        if (
+            assembled_turn
+            and assembled_turn != normalized_question
+        ):
+            user_content += (
+                "Full assembled interviewer turn (setup + ask):\n"
+                f"{assembled_turn}\n\n"
+            )
+
+        user_content += (
+            "Contextually reconstructed concrete question/request:\n"
+            f"{question}\n\n"
         )
 
         if skill_context:
