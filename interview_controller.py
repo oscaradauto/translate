@@ -450,24 +450,16 @@ class InterviewController:
         speaker: str,
         text: str,
     ) -> None:
-        flush_speaker = ""
-        flush_candidate = ""
+        boundary_candidate: QuestionCandidate | None = None
+        current_candidate: QuestionCandidate | None = None
 
         with self._pending_lock:
-            # Never merge speech from two different people into one question.
-            if (
-                self._pending_response_parts
-                and self._pending_response_speaker
-                and self._pending_response_speaker != speaker
-            ):
-                flush_speaker = self._pending_response_speaker
-                flush_candidate = " ".join(
-                    self._pending_response_parts
-                ).strip()
-                self._pending_response_parts.clear()
-
-            self._pending_response_speaker = speaker
-            self._pending_response_parts.append(text)
+            boundary_candidate, current_candidate = (
+                self._question_assembler.append(
+                    speaker,
+                    text,
+                )
+            )
 
             if self._question_timer is not None:
                 self._question_timer.cancel()
@@ -475,10 +467,29 @@ class InterviewController:
             self._question_timer = self._new_question_timer()
             self._question_timer.start()
 
-        if flush_candidate:
-            self._dispatch_candidate(
-                flush_speaker,
-                flush_candidate,
+        if boundary_candidate is not None:
+            self._diag(
+                "assembly_boundary",
+                assembly=boundary_candidate.assembly_id,
+                revision=boundary_candidate.revision,
+                speaker=boundary_candidate.speaker,
+                parts=boundary_candidate.part_count,
+            )
+            self._dispatch_candidate(boundary_candidate)
+
+        if current_candidate is not None:
+            event = (
+                "assembly_started"
+                if current_candidate.revision == 1
+                else "assembly_extended"
+            )
+            self._diag(
+                event,
+                assembly=current_candidate.assembly_id,
+                revision=current_candidate.revision,
+                speaker=current_candidate.speaker,
+                parts=current_candidate.part_count,
+                chars=len(current_candidate.text),
             )
 
     def _extend_question_timer_if_pending(
@@ -486,9 +497,7 @@ class InterviewController:
         speaker: str,
     ) -> None:
         with self._pending_lock:
-            if not self._pending_response_parts:
-                return
-            if self._pending_response_speaker != speaker:
+            if not self._question_assembler.has_pending(speaker):
                 return
 
             if self._question_timer is not None:
@@ -499,77 +508,186 @@ class InterviewController:
 
     def _consume_response_text(self) -> None:
         with self._pending_lock:
-            parts = self._pending_response_parts[:]
-            speaker = self._pending_response_speaker
-            self._pending_response_parts.clear()
-            self._pending_response_speaker = ""
+            candidate = self._question_assembler.snapshot()
             self._question_timer = None
 
-        if not self.running or not parts or not speaker:
+        if not self.running or candidate is None:
             return
 
-        candidate = " ".join(parts).strip()
-        self._dispatch_candidate(speaker, candidate)
+        self._dispatch_candidate(candidate)
 
     def _dispatch_candidate(
         self,
-        speaker: str,
-        candidate: str,
+        candidate: QuestionCandidate,
     ) -> None:
-        if not self.running or not candidate:
+        if not self.running or not candidate.text:
             return
-        if not self._speaker_can_trigger(speaker):
+        if not self._speaker_can_trigger(candidate.speaker):
             return
 
-        if (
-            self._deferred_response_text
-            and self._deferred_response_speaker == speaker
+        self._last_turn_text = candidate.text
+        self._last_turn_speaker = candidate.speaker
+        if candidate.speaker == "INTERVIEWER":
+            self._last_interviewer_text = candidate.text
+
+        self._start_answer(
+            candidate.text,
+            force=False,
+            speaker=candidate.speaker,
+            candidate=candidate,
+        )
+
+    def _candidate_is_stale(
+        self,
+        candidate: QuestionCandidate | None,
+    ) -> bool:
+        if candidate is None:
+            return False
+
+        with self._pending_lock:
+            return self._question_assembler.is_stale(candidate)
+
+    def _claim_candidate(
+        self,
+        candidate: QuestionCandidate | None,
+    ) -> bool:
+        if candidate is None:
+            return True
+
+        with self._pending_lock:
+            active = self._question_assembler.snapshot()
+            was_active = (
+                active is not None
+                and active.assembly_id == candidate.assembly_id
+            )
+            claimed = self._question_assembler.claim(candidate)
+
+            if claimed and was_active:
+                if self._question_timer is not None:
+                    self._question_timer.cancel()
+                self._question_timer = None
+
+            return claimed
+
+    def _discard_candidate(
+        self,
+        candidate: QuestionCandidate | None,
+    ) -> None:
+        if candidate is None:
+            return
+
+        with self._pending_lock:
+            active = self._question_assembler.snapshot()
+            was_active = (
+                active is not None
+                and active.assembly_id == candidate.assembly_id
+                and active.revision == candidate.revision
+            )
+            self._question_assembler.discard(candidate)
+
+            if was_active:
+                if self._question_timer is not None:
+                    self._question_timer.cancel()
+                self._question_timer = None
+
+    def _recent_turns_for_candidate(
+        self,
+        candidate: QuestionCandidate | None,
+    ) -> list[ConversationTurn]:
+        recent_turns = list(self._turns)
+        if candidate is None or candidate.part_count <= 0:
+            return recent_turns
+
+        count = candidate.part_count
+        if count > len(recent_turns):
+            return recent_turns
+
+        tail = recent_turns[-count:]
+        if not all(
+            turn.speaker == candidate.speaker
+            for turn in tail
         ):
-            candidate = (
-                f"{self._deferred_response_text} {candidate}"
-            ).strip()
-            self._deferred_response_text = ""
-            self._deferred_response_speaker = ""
+            return recent_turns
 
-        if speaker == "INTERVIEWER":
-            self._last_interviewer_text = candidate
+        tail_text = " ".join(turn.text for turn in tail).strip()
+        if tail_text != candidate.text:
+            return recent_turns
 
-        self._start_answer(candidate, force=False, speaker=speaker)
+        return recent_turns[:-count]
 
     def _start_answer(
         self,
         question: str,
         force: bool,
         speaker: str = "",
+        candidate: QuestionCandidate | None = None,
     ) -> None:
         if not self.running or self.assistant is None:
             return
 
         if not self._answer_lock.acquire(blocking=False):
-            # Never drop a new interview question just because the previous
-            # answer is still streaming. Keep only the latest pending request
-            # so the assistant catches up instead of generating stale backlog.
+            # Keep the newest full assembled candidate instead of only the
+            # newest STT fragment. This lets a long conversational question
+            # continue growing while a previous analysis/answer is running.
             with self._pending_lock:
                 self._queued_answer_text = question.strip()
                 self._queued_answer_speaker = speaker
                 self._queued_answer_force = force
+                self._queued_answer_candidate = candidate
 
             self._diag(
-                "answer_queued",
+                "analysis_queued",
                 speaker=speaker or "unknown",
                 force=force,
+                assembly=(
+                    candidate.assembly_id
+                    if candidate is not None
+                    else None
+                ),
+                revision=(
+                    candidate.revision
+                    if candidate is not None
+                    else None
+                ),
             )
             self._emit("on_answer_queued", question.strip())
             return
 
-        recent_turns = list(self._turns)
+        recent_turns = self._recent_turns_for_candidate(candidate)
         language = self.language
 
+        self._diag(
+            "analysis_started",
+            speaker=speaker or "unknown",
+            force=force,
+            assembly=(
+                candidate.assembly_id
+                if candidate is not None
+                else None
+            ),
+            revision=(
+                candidate.revision
+                if candidate is not None
+                else None
+            ),
+            parts=(
+                candidate.part_count
+                if candidate is not None
+                else None
+            ),
+        )
         self._emit("on_question_candidate", question)
 
         thread = threading.Thread(
             target=self._answer_worker,
-            args=(question, recent_turns, language, force, speaker),
+            args=(
+                question,
+                recent_turns,
+                language,
+                force,
+                speaker,
+                candidate,
+            ),
             name="interview-answer",
             daemon=True,
         )
@@ -580,9 +698,11 @@ class InterviewController:
             question = self._queued_answer_text
             speaker = self._queued_answer_speaker
             force = self._queued_answer_force
+            candidate = self._queued_answer_candidate
             self._queued_answer_text = ""
             self._queued_answer_speaker = ""
             self._queued_answer_force = False
+            self._queued_answer_candidate = None
 
         if not question or not self.running:
             return
@@ -591,6 +711,7 @@ class InterviewController:
             question,
             force=force,
             speaker=speaker,
+            candidate=candidate,
         )
 
     def _update_coding_context(
