@@ -782,6 +782,7 @@ class InterviewController:
         language: str,
         force: bool,
         speaker: str,
+        candidate: QuestionCandidate | None,
     ) -> None:
         try:
             assistant = self.assistant
@@ -805,7 +806,37 @@ class InterviewController:
                 ms=f"{analyze_ms:.1f}",
                 type=analysis.interview_type,
                 action=analysis.action,
+                assembly=(
+                    candidate.assembly_id
+                    if candidate is not None
+                    else None
+                ),
+                revision=(
+                    candidate.revision
+                    if candidate is not None
+                    else None
+                ),
             )
+
+            # If more speech arrived for the same assembled turn while Groq was
+            # analyzing an older revision, that result is obsolete. Do not let
+            # it update topic/coding state or produce an answer.
+            if not force and self._candidate_is_stale(candidate):
+                self._diag(
+                    "analysis_stale",
+                    assembly=(
+                        candidate.assembly_id
+                        if candidate is not None
+                        else None
+                    ),
+                    revision=(
+                        candidate.revision
+                        if candidate is not None
+                        else None
+                    ),
+                )
+                self._emit("on_question_waiting", question.strip())
+                return
 
             if analysis.topic or analysis.terms:
                 memory_parts = []
@@ -821,11 +852,6 @@ class InterviewController:
                 analysis.question.strip()
                 if analysis.question.strip()
                 else question.strip()
-            )
-
-            coding_context = self._update_coding_context(
-                analysis,
-                reconstructed,
             )
 
             display_topic = analysis.topic
@@ -849,24 +875,112 @@ class InterviewController:
                 analysis.language,
             )
 
-            # Behavioral assistance is intentionally outside Stage 2 scope,
-            # even when the user presses the manual fallback button.
+            # Behavioral assistance is intentionally outside Stage 2 scope.
             if analysis.interview_type == "behavioral":
+                self._discard_candidate(candidate)
+                self._diag(
+                    "assembly_discarded",
+                    reason="behavioral",
+                    assembly=(
+                        candidate.assembly_id
+                        if candidate is not None
+                        else None
+                    ),
+                    revision=(
+                        candidate.revision
+                        if candidate is not None
+                        else None
+                    ),
+                )
                 self._emit("on_question_ignored", reconstructed)
                 return
 
             if not force:
                 if analysis.action == "WAIT":
-                    self._deferred_response_text = question.strip()
-                    self._deferred_response_speaker = speaker
+                    # WAIT keeps the complete assembly intact. The next final
+                    # STT segment extends the same turn and creates a newer
+                    # revision for contextual analysis.
+                    self._diag(
+                        "assembly_wait",
+                        assembly=(
+                            candidate.assembly_id
+                            if candidate is not None
+                            else None
+                        ),
+                        revision=(
+                            candidate.revision
+                            if candidate is not None
+                            else None
+                        ),
+                        parts=(
+                            candidate.part_count
+                            if candidate is not None
+                            else None
+                        ),
+                    )
                     self._emit("on_question_waiting", reconstructed)
                     return
 
                 if analysis.action != "ANSWER":
+                    self._discard_candidate(candidate)
+                    self._diag(
+                        "assembly_discarded",
+                        reason=analysis.action.lower(),
+                        assembly=(
+                            candidate.assembly_id
+                            if candidate is not None
+                            else None
+                        ),
+                        revision=(
+                            candidate.revision
+                            if candidate is not None
+                            else None
+                        ),
+                    )
                     self._emit("on_question_ignored", reconstructed)
                     return
 
+                # Atomically consume only the exact revision that was analyzed.
+                # If another segment arrived between the stale check above and
+                # this point, the claim fails and this result is discarded.
+                if not self._claim_candidate(candidate):
+                    self._diag(
+                        "analysis_stale",
+                        assembly=(
+                            candidate.assembly_id
+                            if candidate is not None
+                            else None
+                        ),
+                        revision=(
+                            candidate.revision
+                            if candidate is not None
+                            else None
+                        ),
+                        phase="claim",
+                    )
+                    self._emit("on_question_waiting", reconstructed)
+                    return
+
+            coding_context = self._update_coding_context(
+                analysis,
+                reconstructed,
+            )
+
             self._last_question = reconstructed
+            self._diag(
+                "question_confirmed",
+                assembly=(
+                    candidate.assembly_id
+                    if candidate is not None
+                    else None
+                ),
+                revision=(
+                    candidate.revision
+                    if candidate is not None
+                    else None
+                ),
+                type=analysis.interview_type,
+            )
             self._emit("on_question_detected", reconstructed)
             self._emit("on_answer_started", reconstructed)
 
