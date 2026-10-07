@@ -65,6 +65,14 @@ MEETING_SUBTITLE_MAX_UTTERANCE_SECONDS = float(
     os.getenv("MEETING_SUBTITLE_MAX_UTTERANCE_SECONDS", "18")
 )
 
+# Give Windows/WASAPI more capture headroom for system-audio loopback while
+# still consuming 30 ms VAD frames. This does not change subtitle segmentation;
+# it only enlarges SoundCard's internal capture buffer to reduce discontinuity
+# warnings when the CPU is briefly busy with local Whisper inference.
+MEETING_WASAPI_BUFFER_MS = int(
+    os.getenv("MEETING_WASAPI_BUFFER_MS", "200")
+)
+
 # Keep live partial captions fast, but let the final pass spend a little more
 # search effort for technical terms once the utterance is complete.
 STAGE1_WHISPER_FINAL_BEAM_SIZE = int(
