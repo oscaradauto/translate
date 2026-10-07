@@ -26,6 +26,7 @@ from config import (
     MEETING_SUBTITLE_MAX_UTTERANCE_SECONDS,
     MEETING_SUBTITLE_SPEECH_END_MS,
     MEETING_VAD_MODE,
+    MEETING_WASAPI_BUFFER_MS,
     MIC_DEVICE_INDEX,
     MIC_MIN_DBFS,
     MIC_MIN_VOICED_MS,
@@ -51,6 +52,17 @@ VAD_FRAME_MS = 30
 PRE_ROLL_MS = 240
 
 _PRE_ROLL_FRAMES = max(1, PRE_ROLL_MS // VAD_FRAME_MS)
+_SYSTEM_READ_FRAMES = int(
+    SYSTEM_SAMPLE_RATE * VAD_FRAME_MS / 1000
+)
+_SYSTEM_WASAPI_BLOCKSIZE_FRAMES = max(
+    _SYSTEM_READ_FRAMES,
+    int(
+        SYSTEM_SAMPLE_RATE
+        * max(VAD_FRAME_MS, MEETING_WASAPI_BUFFER_MS)
+        / 1000
+    ),
+)
 
 
 class _LocalSpeechGate:
@@ -516,16 +528,20 @@ class LocalSystemAudioStreamer:
                 include_loopback=True,
             )
 
+            print(
+                "[Audio:MEETING] WASAPI loopback "
+                f"buffer={MEETING_WASAPI_BUFFER_MS}ms "
+                f"blocksize={_SYSTEM_WASAPI_BLOCKSIZE_FRAMES} "
+                f"read={_SYSTEM_READ_FRAMES}"
+            )
+
             with loopback_mic.recorder(
-                samplerate=SYSTEM_SAMPLE_RATE
+                samplerate=SYSTEM_SAMPLE_RATE,
+                blocksize=_SYSTEM_WASAPI_BLOCKSIZE_FRAMES,
             ) as recorder:
                 while self.running:
                     data = recorder.record(
-                        numframes=int(
-                            SYSTEM_SAMPLE_RATE
-                            * VAD_FRAME_MS
-                            / 1000
-                        )
+                        numframes=_SYSTEM_READ_FRAMES
                     )
                     mono = (
                         data.mean(axis=1)
@@ -671,12 +687,21 @@ class ListenerController:
                 segment_id,
             )
 
+    @staticmethod
+    def _exception_text(exc: BaseException) -> str:
+        name = type(exc).__name__
+        detail = str(exc).strip()
+        return f"{name}: {detail}" if detail else name
+
     def _on_transcription_error(
         self,
         source: str,
         exc: Exception,
     ) -> None:
-        print(f"[Transcription:{source}] {exc}")
+        print(
+            f"[Transcription:{source}] "
+            f"{self._exception_text(exc)}"
+        )
         self._emit(
             "on_transcription_error",
             source,
@@ -684,7 +709,10 @@ class ListenerController:
         )
 
     def _on_capture_error(self, source: str, exc: Exception) -> None:
-        print(f"[Audio:{source}] {exc}")
+        print(
+            f"[Audio:{source}] "
+            f"{self._exception_text(exc)}"
+        )
 
     def start(self) -> None:
         if self.running:
