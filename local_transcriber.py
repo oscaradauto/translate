@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import threading
 import unicodedata
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from typing import Callable
 
 import numpy as np
@@ -237,6 +237,18 @@ class LocalWhisperTranscriber:
             text = future.result().strip()
             if self.suppress_repetition_loops and text:
                 text = self._collapse_repetition_loops(text)
+        except CancelledError:
+            # Normal shutdown cancels queued partials. A cancelled Future has
+            # an empty string representation, which previously produced
+            # misleading "[Transcription:SOURCE]" lines during Stop.
+            text = ""
+            if self._running:
+                self._report_error(
+                    source,
+                    RuntimeError(
+                        "Transcription task cancelled while still running"
+                    ),
+                )
         except Exception as exc:
             text = ""
             self._report_error(source, exc)
@@ -279,6 +291,18 @@ class LocalWhisperTranscriber:
             text = future.result().strip()
             if self.suppress_repetition_loops and text:
                 text = self._collapse_repetition_loops(text)
+        except CancelledError:
+            # Normal shutdown cancels queued partials. A cancelled Future has
+            # an empty string representation, which previously produced
+            # misleading "[Transcription:SOURCE]" lines during Stop.
+            text = ""
+            if self._running:
+                self._report_error(
+                    source,
+                    RuntimeError(
+                        "Transcription task cancelled while still running"
+                    ),
+                )
         except Exception as exc:
             text = ""
             self._report_error(source, exc)
