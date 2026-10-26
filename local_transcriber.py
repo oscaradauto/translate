@@ -11,6 +11,7 @@ import re
 import threading
 import unicodedata
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Callable
 
 import numpy as np
@@ -31,6 +32,13 @@ StatusCallback = Callable[[str], None]
 ErrorCallback = Callable[[str, Exception], None]
 
 
+@dataclass(frozen=True)
+class _TranscriptionResult:
+    text: str
+    avg_logprob: float | None = None
+    no_speech_prob: float | None = None
+
+
 class LocalWhisperTranscriber:
     """Shared configurable local transcription engine."""
 
@@ -46,6 +54,10 @@ class LocalWhisperTranscriber:
         suppress_repetition_loops: bool = False,
         partial_beam_size: int = 1,
         final_beam_size: int = 1,
+        filter_low_confidence_finals: bool = False,
+        low_confidence_max_words: int = 4,
+        low_confidence_avg_logprob: float = -0.75,
+        low_confidence_no_speech_prob: float = 0.35,
     ) -> None:
         self.on_partial = on_partial
         self.on_final = on_final
@@ -57,6 +69,19 @@ class LocalWhisperTranscriber:
         self.suppress_repetition_loops = suppress_repetition_loops
         self.partial_beam_size = max(1, int(partial_beam_size))
         self.final_beam_size = max(1, int(final_beam_size))
+        self.filter_low_confidence_finals = bool(
+            filter_low_confidence_finals
+        )
+        self.low_confidence_max_words = max(
+            1,
+            int(low_confidence_max_words),
+        )
+        self.low_confidence_avg_logprob = float(
+            low_confidence_avg_logprob
+        )
+        self.low_confidence_no_speech_prob = float(
+            low_confidence_no_speech_prob
+        )
 
         self._model: WhisperModel | None = None
         self._executor: ThreadPoolExecutor | None = None
@@ -193,10 +218,10 @@ class LocalWhisperTranscriber:
         self,
         pcm16: bytes,
         beam_size: int = 1,
-    ) -> str:
+    ) -> _TranscriptionResult:
         model = self._model
         if model is None:
-            return ""
+            return _TranscriptionResult("")
 
         audio = (
             np.frombuffer(pcm16, dtype=np.int16)
@@ -205,7 +230,7 @@ class LocalWhisperTranscriber:
         )
 
         if audio.size == 0:
-            return ""
+            return _TranscriptionResult("")
 
         segments, _ = model.transcribe(
             audio,
@@ -219,12 +244,32 @@ class LocalWhisperTranscriber:
             initial_prompt=self.initial_prompt or None,
         )
 
-        parts = [
-            segment.text.strip()
-            for segment in segments
-            if segment.text and segment.text.strip()
-        ]
-        return " ".join(parts).strip()
+        parts: list[str] = []
+        avg_logprobs: list[float] = []
+        no_speech_probs: list[float] = []
+
+        for segment in segments:
+            text = (segment.text or "").strip()
+            if not text:
+                continue
+
+            parts.append(text)
+            avg_logprobs.append(float(segment.avg_logprob))
+            no_speech_probs.append(float(segment.no_speech_prob))
+
+        return _TranscriptionResult(
+            text=" ".join(parts).strip(),
+            avg_logprob=(
+                sum(avg_logprobs) / len(avg_logprobs)
+                if avg_logprobs
+                else None
+            ),
+            no_speech_prob=(
+                max(no_speech_probs)
+                if no_speech_probs
+                else None
+            ),
+        )
 
     def _finish_partial(
         self,
@@ -234,7 +279,8 @@ class LocalWhisperTranscriber:
         future: Future,
     ) -> None:
         try:
-            text = future.result().strip()
+            result = future.result()
+            text = result.text.strip()
             if self.suppress_repetition_loops and text:
                 text = self._collapse_repetition_loops(text)
         except CancelledError:
@@ -288,9 +334,27 @@ class LocalWhisperTranscriber:
         key = (source, segment_id)
 
         try:
-            text = future.result().strip()
+            result = future.result()
+            text = result.text.strip()
             if self.suppress_repetition_loops and text:
                 text = self._collapse_repetition_loops(text)
+
+            if (
+                self.filter_low_confidence_finals
+                and text
+                and self._is_low_confidence_final(text, result)
+            ):
+                word_count = self._word_count(text)
+                avg_logprob = result.avg_logprob
+                no_speech_prob = result.no_speech_prob
+                print(
+                    f"[Transcription:{source}] "
+                    "suppressed low-confidence final "
+                    f"words={word_count} "
+                    f"avg_logprob={avg_logprob:.2f} "
+                    f"no_speech_prob={no_speech_prob:.2f}"
+                )
+                text = ""
         except CancelledError:
             # Normal shutdown cancels queued partials. A cancelled Future has
             # an empty string representation, which previously produced
@@ -315,6 +379,36 @@ class LocalWhisperTranscriber:
 
         if self._running and text:
             self.on_final(source, text, segment_id)
+
+    @staticmethod
+    def _word_count(text: str) -> int:
+        return len(
+            re.findall(
+                r"[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)?",
+                text,
+            )
+        )
+
+    def _is_low_confidence_final(
+        self,
+        text: str,
+        result: _TranscriptionResult,
+    ) -> bool:
+        """Drop only short finals with two independent weak-speech signals."""
+        word_count = self._word_count(text)
+        if (
+            word_count == 0
+            or word_count > self.low_confidence_max_words
+            or result.avg_logprob is None
+            or result.no_speech_prob is None
+        ):
+            return False
+
+        return (
+            result.avg_logprob < self.low_confidence_avg_logprob
+            and result.no_speech_prob
+            > self.low_confidence_no_speech_prob
+        )
 
     @staticmethod
     def _collapse_repetition_loops(text: str) -> str:
