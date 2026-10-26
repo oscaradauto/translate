@@ -483,6 +483,10 @@ class SubtitleTab(QWidget):
             MEETING_SUBTITLE_SPEECH_END_MS,
             MIC_SUBTITLE_MAX_UTTERANCE_SECONDS,
             MIC_SUBTITLE_SPEECH_END_MS,
+            STAGE1_LOW_CONFIDENCE_AVG_LOGPROB,
+            STAGE1_LOW_CONFIDENCE_FILTER_ENABLED,
+            STAGE1_LOW_CONFIDENCE_MAX_WORDS,
+            STAGE1_LOW_CONFIDENCE_NO_SPEECH_PROB,
             STAGE1_WHISPER_FINAL_BEAM_SIZE,
         )
         from vad_detector import ListenerController
@@ -500,6 +504,18 @@ class SubtitleTab(QWidget):
             suppress_repetition_loops=True,
             partial_beam_size=1,
             final_beam_size=STAGE1_WHISPER_FINAL_BEAM_SIZE,
+            filter_low_confidence_finals=(
+                STAGE1_LOW_CONFIDENCE_FILTER_ENABLED
+            ),
+            low_confidence_max_words=(
+                STAGE1_LOW_CONFIDENCE_MAX_WORDS
+            ),
+            low_confidence_avg_logprob=(
+                STAGE1_LOW_CONFIDENCE_AVG_LOGPROB
+            ),
+            low_confidence_no_speech_prob=(
+                STAGE1_LOW_CONFIDENCE_NO_SPEECH_PROB
+            ),
         )
 
         threading.Thread(
