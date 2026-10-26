@@ -79,6 +79,26 @@ STAGE1_WHISPER_FINAL_BEAM_SIZE = int(
     os.getenv("STAGE1_WHISPER_FINAL_BEAM_SIZE", "3")
 )
 
+# Conservative Stage 1 post-filter for very short, weak Whisper finals.
+# Faster-Whisper already has its own no-speech handling; these stricter
+# thresholds only remove short residual captions when both confidence signals
+# are weak. Stage 2 does not enable this filter.
+STAGE1_LOW_CONFIDENCE_FILTER_ENABLED = (
+    os.getenv("STAGE1_LOW_CONFIDENCE_FILTER_ENABLED", "true")
+    .strip()
+    .lower()
+    in {"1", "true", "yes", "on"}
+)
+STAGE1_LOW_CONFIDENCE_MAX_WORDS = int(
+    os.getenv("STAGE1_LOW_CONFIDENCE_MAX_WORDS", "4")
+)
+STAGE1_LOW_CONFIDENCE_AVG_LOGPROB = float(
+    os.getenv("STAGE1_LOW_CONFIDENCE_AVG_LOGPROB", "-0.75")
+)
+STAGE1_LOW_CONFIDENCE_NO_SPEECH_PROB = float(
+    os.getenv("STAGE1_LOW_CONFIDENCE_NO_SPEECH_PROB", "0.35")
+)
+
 # False-positive protection. The physical microphone is intentionally more
 # conservative than system audio because speaker bleed / room noise can make
 # Whisper hallucinate short words even when the user did not speak.
@@ -103,32 +123,23 @@ LOCAL_SPEECH_GATE_HOLD_MS = int(
     os.getenv("LOCAL_SPEECH_GATE_HOLD_MS", "800")
 )
 
-# Bias the local model toward the vocabulary used in engineering meetings.
+# Bias the local model toward vocabulary repeatedly observed in real Stage 1
+# meetings. Keep this prompt focused: overly broad prompts can themselves seed
+# unrelated words into short/noisy audio.
 WHISPER_INITIAL_PROMPT = os.getenv(
     "WHISPER_INITIAL_PROMPT",
     (
-        "English software engineering team meeting. "
-        "Technical vocabulary may include ADR, ADRs, Architecture Decision "
-        "Record, architecture decision records, sensible defaults, Java, "
-        "Spring Boot, Kafka, Azure, Azure Functions, GraphQL, REST APIs, SDK, "
-        "SDKs, API, APIs, GitHub, pull request, PR, repository, repositories, "
-        "Jira, JQL, MXL, PDP, PLP, AEM, APAC, iOS, Android, DRY principle, "
-        "Tailwind, Tailwind CSS, Sass, SCSS, Lottie, SVG, Postman, Proxyman, "
-        "ServiceNow, HAR logs, CTASK, Confluence, MCP, serverless, coding agents, "
-        "Q1, Q3, Q4, deployment, latency, cold start, circuit breaker, circuit "
-        "breakers, acceptance criteria, story points, schema PR, refinement, "
-        "Kanban, OpenTelemetry, New Relic, Application Insights, App Insights, "
-        "ContentSquare, Klarna, Afterpay, Azure Function Apps, virtual threads, "
-        "Java 21, application-level executor, shared executor, feature flag, "
-        "trace ID, operation key, dependency key, downstream service, telemetry, "
-        "instrumentation, P50, P95, P99, conversion rate, checkout completion, "
-        "access token, refresh token, high-priority, priority, Jira links, "
-        "ticket links, blocked by, depends on, code freeze, mobile regression, "
-        "production release, cart API, wallet info API, dev environment, "
-        "live traffic, release regression, timeout, cache validation, state "
-        "management, memory management, garbage collection, authentication, "
-        "OAuth, performance testing, load testing, QA, schema, endpoint, getCart, "
-        "observability and tracing."
+        "English software engineering meeting for Foot Locker MXL. "
+        "Preserve canonical technical spelling and acronyms. Common phrases: "
+        "MXL, store mode, size variance, size variant, size preferences, "
+        "US sizing, UK sizing, EU sizing, EMEA, APAC, Store Inventory Service, "
+        "Search Core, store configurations query, user info query, PDP, PLP, "
+        "UPC, SKU, UAT, QA validation, OBF decommission, Proxyman, HAR logs, "
+        "Jira, PR, GitHub, GraphQL, REST API, cart API, wallet API, loyalty API, "
+        "timeout, soft dependency, circuit breaker, shared application-level "
+        "executor, MDC propagation executor, Azure Function Apps, App Insights, "
+        "OpenTelemetry, New Relic, cold start, always-on instance, code freeze, "
+        "dev environment, test environment, production release."
     ),
 )
 
