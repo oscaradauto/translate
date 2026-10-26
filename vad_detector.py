@@ -608,6 +608,10 @@ class ListenerController:
         suppress_repetition_loops: bool = False,
         partial_beam_size: int = 1,
         final_beam_size: int = 1,
+        filter_low_confidence_finals: bool = False,
+        low_confidence_max_words: int = 4,
+        low_confidence_avg_logprob: float = -0.75,
+        low_confidence_no_speech_prob: float = 0.35,
     ):
         self.callbacks = callbacks
         self.mic_device = mic_device
@@ -642,6 +646,19 @@ class ListenerController:
         self.suppress_repetition_loops = suppress_repetition_loops
         self.partial_beam_size = max(1, int(partial_beam_size))
         self.final_beam_size = max(1, int(final_beam_size))
+        self.filter_low_confidence_finals = bool(
+            filter_low_confidence_finals
+        )
+        self.low_confidence_max_words = max(
+            1,
+            int(low_confidence_max_words),
+        )
+        self.low_confidence_avg_logprob = float(
+            low_confidence_avg_logprob
+        )
+        self.low_confidence_no_speech_prob = float(
+            low_confidence_no_speech_prob
+        )
 
         self.running = False
         self.mic_streamer: LocalMicStreamer | None = None
@@ -749,6 +766,18 @@ class ListenerController:
                     ),
                     partial_beam_size=self.partial_beam_size,
                     final_beam_size=self.final_beam_size,
+                    filter_low_confidence_finals=(
+                        self.filter_low_confidence_finals
+                    ),
+                    low_confidence_max_words=(
+                        self.low_confidence_max_words
+                    ),
+                    low_confidence_avg_logprob=(
+                        self.low_confidence_avg_logprob
+                    ),
+                    low_confidence_no_speech_prob=(
+                        self.low_confidence_no_speech_prob
+                    ),
                 )
 
             self.transcriber.start()
