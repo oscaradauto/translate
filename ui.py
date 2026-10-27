@@ -711,13 +711,19 @@ class SubtitleTab(QWidget):
         copy_button.setStyleSheet(_button_style())
         copy_button.setEnabled(bool(history_text))
 
+        # Keep the reset timer owned by the button. If the history dialog is
+        # closed before the timeout fires, Qt destroys both objects together,
+        # preventing a callback from touching an already-deleted QPushButton.
+        copy_reset_timer = QTimer(copy_button)
+        copy_reset_timer.setSingleShot(True)
+        copy_reset_timer.timeout.connect(
+            lambda: copy_button.setText("📋 Copiar todo")
+        )
+
         def copy_history() -> None:
             QApplication.clipboard().setText(history_text)
             copy_button.setText("✓ Copiado")
-            QTimer.singleShot(
-                1200,
-                lambda: copy_button.setText("📋 Copiar todo"),
-            )
+            copy_reset_timer.start(1200)
 
         copy_button.clicked.connect(copy_history)
         buttons.addWidget(copy_button)
