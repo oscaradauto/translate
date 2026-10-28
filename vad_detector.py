@@ -8,8 +8,10 @@ AUDIO -> WebRTC VAD -> Faster-Whisper -> English captions
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
+import warnings
 from collections import deque
 from typing import Callable
 
@@ -491,6 +493,7 @@ class LocalSystemAudioStreamer:
         self.partials_enabled = partials_enabled
         self.running = False
         self.thread: threading.Thread | None = None
+        self._wasapi_discontinuity_count = 0
 
     def start(self) -> None:
         if self.running:
@@ -500,6 +503,7 @@ class LocalSystemAudioStreamer:
         speaker = sc.default_speaker()
         sc.get_microphone(speaker.name, include_loopback=True)
 
+        self._wasapi_discontinuity_count = 0
         self.running = True
         self.thread = threading.Thread(
             target=self._capture_loop,
@@ -539,45 +543,93 @@ class LocalSystemAudioStreamer:
                 samplerate=SYSTEM_SAMPLE_RATE,
                 blocksize=_SYSTEM_WASAPI_BLOCKSIZE_FRAMES,
             ) as recorder:
-                while self.running:
-                    data = recorder.record(
-                        numframes=_SYSTEM_READ_FRAMES
-                    )
-                    mono = (
-                        data.mean(axis=1)
-                        if data.ndim > 1
-                        else data
-                    )
-                    pcm16 = _float32_to_pcm16(mono)
-                    target_pcm16 = _resample_pcm16(
-                        pcm16,
-                        SYSTEM_SAMPLE_RATE,
-                    )
-                    now = time.monotonic()
+                # SoundCard reports WASAPI data discontinuities as warnings,
+                # not exceptions. Capture them so each event gets a useful
+                # meeting-local timestamp and counter that can be compared
+                # directly with the subtitle history.
+                with warnings.catch_warnings(record=True) as captured_warnings:
+                    warnings.simplefilter("always")
 
-                    # If the physical microphone is currently detecting the
-                    # local user, YOU owns this time window. Drop loopback
-                    # audio instead of allowing the same voice to be labelled
-                    # as a remote meeting participant.
-                    if self.local_speech_gate.is_local_speech_active(now):
-                        segmenter.abort()
-                        continue
+                    while self.running:
+                        data = recorder.record(
+                            numframes=_SYSTEM_READ_FRAMES
+                        )
 
-                    speech = _is_speech(
-                        target_pcm16,
-                        TARGET_SAMPLE_RATE,
-                        vad,
-                    )
-                    segmenter.process(
-                        target_pcm16,
-                        speech,
-                        now,
-                    )
+                        if captured_warnings:
+                            self._report_capture_warnings(
+                                captured_warnings
+                            )
+
+                        mono = (
+                            data.mean(axis=1)
+                            if data.ndim > 1
+                            else data
+                        )
+                        pcm16 = _float32_to_pcm16(mono)
+                        target_pcm16 = _resample_pcm16(
+                            pcm16,
+                            SYSTEM_SAMPLE_RATE,
+                        )
+                        now = time.monotonic()
+
+                        # If the physical microphone is currently detecting the
+                        # local user, YOU owns this time window. Drop loopback
+                        # audio instead of allowing the same voice to be labelled
+                        # as a remote meeting participant.
+                        if self.local_speech_gate.is_local_speech_active(now):
+                            segmenter.abort()
+                            continue
+
+                        speech = _is_speech(
+                            target_pcm16,
+                            TARGET_SAMPLE_RATE,
+                            vad,
+                        )
+                        segmenter.process(
+                            target_pcm16,
+                            speech,
+                            now,
+                        )
         except Exception as exc:
             if self.running:
                 self.on_error("MEETING", exc)
         finally:
+            print(
+                "[Audio:MEETING] WASAPI discontinuities "
+                f"total={self._wasapi_discontinuity_count}"
+            )
             segmenter.flush()
+
+    def _report_capture_warnings(self, captured_warnings) -> None:
+        for captured in list(captured_warnings):
+            message = str(captured.message).strip()
+            category_name = captured.category.__name__
+
+            if (
+                category_name == "SoundcardRuntimeWarning"
+                and message == "data discontinuity in recording"
+            ):
+                self._wasapi_discontinuity_count += 1
+                wall_clock = time.strftime("%I:%M:%S %p")
+                print(
+                    "[Audio:MEETING] WASAPI discontinuity "
+                    f"#{self._wasapi_discontinuity_count} "
+                    f"at {wall_clock}"
+                )
+                continue
+
+            # Preserve any unrelated warning instead of silently swallowing it
+            # while SoundCard discontinuities are being instrumented.
+            formatted = warnings.formatwarning(
+                captured.message,
+                captured.category,
+                captured.filename,
+                captured.lineno,
+                line=captured.line,
+            )
+            print(formatted, file=sys.stderr, end="")
+
+        captured_warnings.clear()
 
     def stop(self) -> None:
         self.running = False
