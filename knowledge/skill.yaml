@@ -1,13 +1,16 @@
 profile:
   name: "Java Developer Interview Profile"
-  level: "senior"
+  level: "not_specified"
   purpose_en: >
-    Reference profile for Stage 2 preparation for a Java Developer technical interview with Unosquare Colombia. It describes technical competencies and answer guidance, not verified personal experience or Unosquare internal technologies.
-    It describes the expected competencies and communication style of a strong
-    senior software developer. It intentionally avoids invented employers,
-    project names, dates, metrics, and unverifiable personal achievements.
+    Reference profile for Stage 2 preparation for a Java Developer technical
+    interview with Unosquare Colombia. It describes technical competencies and
+    answer guidance; it is not a record of verified personal experience and
+    does not assert knowledge of Unosquare's internal technologies.
   purpose_es: >
-    Perfil de referencia para preparar Stage 2 para una entrevista técnica de Java Developer en Unosquare Colombia. Describe competencias técnicas y orientación para responder; no representa experiencia personal verificada ni afirma conocer tecnologías internas de Unosquare.
+    Perfil de referencia para preparar Stage 2 para una entrevista técnica de
+    Java Developer en Unosquare Colombia. Describe competencias técnicas y
+    orientación para responder; no representa experiencia personal verificada
+    ni afirma conocer tecnologías internas de Unosquare.
 
 skills:
   - topic: "Senior Engineering Mindset"
