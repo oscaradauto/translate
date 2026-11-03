@@ -1,16 +1,13 @@
 profile:
-  name: "Senior Software Developer"
+  name: "Java Developer Interview Profile"
   level: "senior"
   purpose_en: >
-    Reference profile for Stage 2 practice and permitted interview assistance.
+    Reference profile for Stage 2 preparation for a Java Developer technical interview with Unosquare Colombia. It describes technical competencies and answer guidance, not verified personal experience or Unosquare internal technologies.
     It describes the expected competencies and communication style of a strong
     senior software developer. It intentionally avoids invented employers,
     project names, dates, metrics, and unverifiable personal achievements.
   purpose_es: >
-    Perfil de referencia para práctica de Stage 2 y entrevistas donde la
-    asistencia esté permitida. Describe las competencias y el estilo de
-    comunicación esperados de un desarrollador de software senior. Evita
-    empleadores, proyectos, fechas, métricas y logros personales inventados.
+    Perfil de referencia para preparar Stage 2 para una entrevista técnica de Java Developer en Unosquare Colombia. Describe competencias técnicas y orientación para responder; no representa experiencia personal verificada ni afirma conocer tecnologías internas de Unosquare.
 
 skills:
   - topic: "Senior Engineering Mindset"
@@ -46,6 +43,17 @@ skills:
   - topic: "Java Core and Object-Oriented Design"
     keywords:
       - "java"
+      - "java 21"
+      - "java 17"
+      - "jdk"
+      - "jre"
+      - "records"
+      - "sealed classes"
+      - "pattern matching"
+      - "virtual threads"
+      - "generics"
+      - "exception handling"
+      - "garbage collection"
       - "jvm"
       - "object oriented"
       - "oop"
@@ -61,6 +69,8 @@ skills:
     tools:
       - "Java"
       - "JVM"
+      - "Java 21"
+      - "JDK"
       - "Java Collections"
       - "Streams"
       - "Optional"
@@ -68,12 +78,14 @@ skills:
       Strong Java work emphasizes clear domain modeling, immutability where it
       reduces accidental state changes, correct equals/hashCode contracts,
       appropriate collection choices, readable Stream usage, and APIs that make
-      invalid states difficult to represent.
+      invalid states difficult to represent. Java 21 topics include records, sealed types,
+      pattern matching, and virtual threads; always match the version named by the interviewer.
     summary_es: >
       Un buen trabajo en Java enfatiza modelado claro del dominio, inmutabilidad
       cuando reduce cambios accidentales de estado, contratos correctos de
       equals/hashCode, selección adecuada de colecciones, uso legible de Streams
-      y APIs que dificulten representar estados inválidos.
+      y APIs que dificulten representar estados inválidos. Para Java 21, considera records,
+      sealed types, pattern matching y virtual threads; respeta siempre la versión indicada.
     answer_guidance_en: >
       Prefer simple Java solutions first, then discuss performance, concurrency,
       or framework implications only when they materially affect the problem.
@@ -81,9 +93,72 @@ skills:
       Prefiere primero soluciones simples en Java y después discute rendimiento,
       concurrencia o implicaciones de framework solo cuando afecten realmente el problema.
 
+  - topic: "Algorithms and Data Structures"
+    keywords:
+      - "algorithm"
+      - "data structure"
+      - "big o"
+      - "time complexity"
+      - "space complexity"
+      - "array"
+      - "string"
+      - "hashmap"
+      - "hash map"
+      - "hashset"
+      - "stack"
+      - "queue"
+      - "two pointers"
+      - "sliding window"
+      - "binary search"
+      - "sorting"
+      - "recursion"
+      - "tree"
+      - "graph"
+      - "anagram"
+      - "duplicate elements"
+      - "algoritmo"
+      - "estructura de datos"
+      - "complejidad temporal"
+      - "complejidad espacial"
+      - "arreglo"
+      - "cadena"
+      - "búsqueda binaria"
+    tools:
+      - "Java Collections"
+      - "Big-O analysis"
+    summary_en: >
+      Coding interviews assess how a candidate clarifies inputs and constraints,
+      selects suitable data structures, handles edge cases, and explains time
+      and space complexity. Common patterns include arrays and strings, maps and
+      sets, stacks and queues, sorting, binary search, two pointers, sliding
+      windows, recursion, trees, and graphs.
+    summary_es: >
+      Las entrevistas de coding evalúan cómo se aclaran entradas y restricciones,
+      se seleccionan estructuras de datos, se manejan casos límite y se explica
+      la complejidad temporal y espacial. Los patrones comunes incluyen arreglos,
+      cadenas, mapas, conjuntos, pilas, colas, ordenamiento, búsqueda binaria,
+      two pointers, sliding window, recursión, árboles y grafos.
+    answer_guidance_en: >
+      Clarify assumptions, give a straightforward baseline when useful, then
+      optimize for the stated constraints and verify edge cases before stating
+      Big-O complexity.
+    answer_guidance_es: >
+      Aclara supuestos, plantea una solución directa cuando sea útil, optimiza
+      según las restricciones y valida casos límite antes de indicar Big-O.
+
   - topic: "Spring Boot and Dependency Injection"
     keywords:
       - "spring"
+      - "spring boot 3"
+      - "spring data jpa"
+      - "spring mvc"
+      - "restcontroller"
+      - "spring security"
+      - "validation"
+      - "exception handler"
+      - "entitymanager"
+      - "transactional"
+      - "bean lifecycle"
       - "spring boot"
       - "dependency injection"
       - "inversion of control"
@@ -97,6 +172,9 @@ skills:
     tools:
       - "Spring Boot"
       - "Spring Framework"
+      - "Spring Data JPA"
+      - "Spring Security"
+      - "Hibernate"
     summary_en: >
       Spring Boot is used to build maintainable services with explicit
       dependencies, constructor injection, clear configuration boundaries, and
@@ -223,6 +301,20 @@ skills:
   - topic: "SQL JPA and Transaction Management"
     keywords:
       - "sql"
+      - "oracle"
+      - "oracle database"
+      - "oracle db"
+      - "jdbc"
+      - "spring data jpa"
+      - "entitymanager"
+      - "@transactional"
+      - "n+1"
+      - "fetch join"
+      - "entity graph"
+      - "optimistic locking"
+      - "pessimistic locking"
+      - "pagination"
+      - "query optimization"
       - "database"
       - "jpa"
       - "hibernate"
@@ -241,6 +333,8 @@ skills:
       - "SQL"
       - "JPA"
       - "Hibernate"
+      - "Oracle Database"
+      - "JDBC"
     summary_en: >
       Persistence design starts with data access patterns, transaction
       boundaries, indexes, consistency requirements, and query behavior.
@@ -293,6 +387,9 @@ skills:
       - "concurrency"
       - "multithreading"
       - "thread"
+      - "thread pool"
+      - "virtual threads"
+      - "java 21 virtual threads"
       - "executorservice"
       - "completablefuture"
       - "synchronized"
@@ -449,6 +546,13 @@ skills:
   - topic: "Testing Strategy and Code Quality"
     keywords:
       - "testing"
+      - "junit"
+      - "junit 5"
+      - "mockito"
+      - "mockmvc"
+      - "testcontainers"
+      - "unit testing"
+      - "integration testing"
       - "unit test"
       - "integration test"
       - "contract test"
@@ -461,6 +565,10 @@ skills:
       - "code review"
       - "pruebas"
       - "calidad"
+    tools:
+      - "JUnit 5"
+      - "Mockito"
+      - "MockMvc"
     summary_en: >
       Testing should protect behavior at the cheapest useful level. Unit tests
       cover focused logic, integration tests verify important boundaries, and
@@ -479,6 +587,11 @@ skills:
   - topic: "Security and Authentication"
     keywords:
       - "security"
+      - "spring security"
+      - "security filter chain"
+      - "password encoder"
+      - "csrf"
+      - "cors"
       - "authentication"
       - "authorization"
       - "oauth"
@@ -525,6 +638,7 @@ skills:
       - "despliegue"
     tools:
       - "Azure"
+      - "AWS"
       - "Docker"
       - "Kubernetes"
     summary_en: >
@@ -608,6 +722,42 @@ skills:
     answer_guidance_es: >
       Estructura respuestas de incidentes como impacto, diagnóstico, mitigación,
       causa raíz y prevención, sin inventar un incidente personal.
+
+  - topic: "Java Build Tools and Dependency Management"
+    keywords:
+      - "gradle"
+      - "maven"
+      - "gradle wrapper"
+      - "maven wrapper"
+      - "dependency management"
+      - "build lifecycle"
+      - "multi module"
+      - "build plugin"
+      - "artifact repository"
+      - "sonatype"
+      - "nexus"
+      - "gestión de dependencias"
+    tools:
+      - "Gradle"
+      - "Maven"
+      - "Sonatype Nexus"
+    summary_en: >
+      Build tools manage dependency resolution, compilation, tests, packaging,
+      plugins, and reproducible delivery. Gradle and Maven solve similar needs
+      with different build models and configuration styles; wrapper files help
+      teams use a consistent build version.
+    summary_es: >
+      Las herramientas de build gestionan resolución de dependencias,
+      compilación, pruebas, empaquetado, plugins y entregas reproducibles.
+      Gradle y Maven cubren necesidades similares con modelos y estilos de
+      configuración diferentes; los wrappers ayudan a mantener una versión
+      consistente de la herramienta.
+    answer_guidance_en: >
+      Explain the build lifecycle and dependency scopes, then compare Gradle
+      and Maven based on project conventions, flexibility, and maintainability.
+    answer_guidance_es: >
+      Explica el ciclo de build y los scopes de dependencias; compara Gradle
+      y Maven según convenciones, flexibilidad y mantenibilidad.
 
   - topic: "Agile Scrum and Team Delivery"
     keywords:
