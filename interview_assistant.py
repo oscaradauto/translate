@@ -27,6 +27,65 @@ from config import (
 DeltaCallback = Callable[[str], None]
 
 
+UNOSQUARE_INTERVIEW_CONTEXT_EN = """TARGET: Java Developer technical interview for Unosquare Colombia.
+Treat Unosquare only as the target employer. Do not claim to know its private client stack, interview stages, scoring rubric, or required technologies. Do not infer the candidate's seniority from the company name or role title. Use only technologies stated by the interviewer or supported by the candidate profile.
+
+PRIORITIZE THE FOLLOWING JAVA-BACKEND AREAS WHEN THEY MATCH THE QUESTION:
+- Java 21 and Java Core: OOP, SOLID, generics, exceptions, immutability, equals/hashCode, collections, Streams, lambdas, Optional, records, sealed classes, pattern matching, and the JDK/JRE/JVM distinction.
+- JVM and concurrency: stack versus heap, garbage collection, memory leaks, ExecutorService, thread pools, synchronized, locks, CompletableFuture, ConcurrentHashMap, race conditions, deadlocks, and Java 21 virtual threads.
+- Spring: Spring Boot, IoC/DI, bean lifecycle, configuration, REST controllers, validation, exception handling, Spring Data JPA, Hibernate, transactions, lazy/eager loading, and the N+1 problem.
+- Data: SQL, Oracle Database, relational modeling, indexes, joins, ACID, isolation, query performance, JPA mappings, and when a NoSQL model is appropriate.
+- Backend architecture: REST, API versioning, authentication/authorization, JWT/OAuth2, microservices, Kafka, event-driven design, Redis, retries, timeouts, Circuit Breaker, and idempotency.
+- Engineering delivery: JUnit 5, Mockito, unit/integration testing, Gradle/Maven, Git, CI/CD, AWS/cloud fundamentals, Docker, observability, and Architecture Decision Records.
+
+Give the direct answer first, then explain the mechanism and the most relevant trade-off or practical consequence. Use a small example only when it makes the answer clearer. Distinguish language features from framework behavior and database behavior. Do not introduce Spring, cloud infrastructure, or a distributed-systems pattern into a plain Java algorithm unless requested. Never present a technology as part of Unosquare's actual stack unless the interviewer explicitly confirms it. Preserve the strict rule against inventing the candidate's personal work history.
+"""
+
+UNOSQUARE_INTERVIEW_CONTEXT_ES = """OBJETIVO: entrevista técnica para el cargo Java Developer en Unosquare Colombia.
+Trata a Unosquare únicamente como la empresa objetivo. No afirmes conocer su stack privado de clientes, etapas de entrevista, rúbrica de evaluación ni tecnologías obligatorias. No deduzcas la seniority del candidato por el nombre de la empresa o del cargo. Usa únicamente tecnologías mencionadas por el entrevistador o respaldadas por el perfil del candidato.
+
+PRIORIZA ESTAS ÁREAS DE BACKEND JAVA CUANDO CORRESPONDAN A LA PREGUNTA:
+- Java 21 y Java Core: POO, SOLID, genéricos, excepciones, inmutabilidad, equals/hashCode, colecciones, Streams, lambdas, Optional, records, sealed classes, pattern matching y diferencias entre JDK/JRE/JVM.
+- JVM y concurrencia: stack frente a heap, garbage collection, memory leaks, ExecutorService, thread pools, synchronized, locks, CompletableFuture, ConcurrentHashMap, race conditions, deadlocks y virtual threads de Java 21.
+- Spring: Spring Boot, IoC/DI, ciclo de vida de beans, configuración, controladores REST, validaciones, manejo de excepciones, Spring Data JPA, Hibernate, transacciones, carga lazy/eager y problema N+1.
+- Datos: SQL, Oracle Database, modelado relacional, índices, joins, ACID, aislamiento, rendimiento de consultas, relaciones JPA y cuándo conviene un modelo NoSQL.
+- Arquitectura backend: REST, versionado de APIs, autenticación/autorización, JWT/OAuth2, microservicios, Kafka, arquitectura orientada a eventos, Redis, retries, timeouts, Circuit Breaker e idempotencia.
+- Entrega de software: JUnit 5, Mockito, pruebas unitarias/de integración, Gradle/Maven, Git, CI/CD, fundamentos de AWS/cloud, Docker, observabilidad y Architecture Decision Records.
+
+Da primero la respuesta directa y luego explica el mecanismo y el trade-off o consecuencia práctica más relevante. Usa un ejemplo pequeño solo cuando aclare la respuesta. Distingue las características del lenguaje de Java del comportamiento de Spring y de las bases de datos. No introduzcas Spring, infraestructura cloud ni patrones distribuidos en un algoritmo de Java puro salvo que lo pidan. Nunca presentes una tecnología como parte del stack real de Unosquare si el entrevistador no lo confirma explícitamente. Conserva la regla estricta de no inventar experiencia laboral del candidato.
+"""
+
+UNOSQUARE_CODING_CONTEXT_EN = """JAVA CODING INTERVIEW RULES:
+- Use Java 21 by default when the interviewer does not specify a language or Java version. If a version is stated, follow that version and avoid APIs/features introduced later. Do not use preview features.
+- For algorithm/data-structure exercises, use plain Java and the standard library; do not add Spring Boot or external dependencies.
+- Preserve any method signature, class name, input/output contract, and constraints supplied by the interviewer. Do not invent console input formats or requirements.
+- Return a complete, compilable implementation with required imports. Use a console Main class only when stdin/stdout is requested; otherwise provide the requested method in a suitable class.
+- Consider empty input, nullability, duplicates, negative values, integer overflow, and boundary conditions when relevant to the stated requirements.
+- State accurate time and space complexity. Prefer readable loops and appropriate collections; use Streams when requested or when they materially improve clarity, not merely to appear advanced.
+- For Java 21, use virtual threads only when the workload and blocking behavior justify them; do not confuse them with CPU parallelism.
+- Keep code free of comments unless the interviewer explicitly requests comments. Use JUnit 5/Mockito only when tests or mocking are requested.
+"""
+
+UNOSQUARE_CODING_CONTEXT_ES = """REGLAS PARA EJERCICIOS DE CODING EN JAVA:
+- Usa Java 21 por defecto cuando el entrevistador no especifique lenguaje ni versión. Si indica una versión, respétala y evita APIs/características posteriores. No uses características preview.
+- Para algoritmos y estructuras de datos, usa Java puro y la biblioteca estándar; no agregues Spring Boot ni dependencias externas.
+- Conserva exactamente la firma del método, nombre de clase, contrato de entrada/salida y restricciones indicadas por el entrevistador. No inventes formatos de entrada por consola ni requisitos.
+- Devuelve una implementación completa y compilable con los imports necesarios. Usa una clase Main con consola solo si solicitan stdin/stdout; en otro caso entrega el método solicitado dentro de una clase adecuada.
+- Considera entrada vacía, null, duplicados, valores negativos, overflow de enteros y casos límite cuando sean relevantes para los requisitos.
+- Indica correctamente la complejidad temporal y espacial. Prefiere ciclos legibles y colecciones adecuadas; usa Streams cuando lo pidan o cuando mejoren realmente la claridad, no solo para aparentar sofisticación.
+- En Java 21, usa virtual threads solo cuando el tipo de carga y el comportamiento bloqueante lo justifiquen; no los confundas con paralelismo para CPU.
+- Mantén el código sin comentarios salvo que el entrevistador los solicite explícitamente. Usa JUnit 5/Mockito solo cuando pidan pruebas o mocks.
+"""
+
+UNOSQUARE_CONTEXTUALIZER_ADDENDUM = """Target interview: Java Developer technical interview for Unosquare Colombia. The company name is context only; never infer its actual client stack, required frameworks, interview format, or evaluation rubric.
+
+When reconstructing Java-related speech, recognize canonical terms and likely ASR variants for: Java 8/11/17/21, JDK, JRE, JVM, records, sealed classes, pattern matching, virtual threads, generics, equals/hashCode, ArrayList, HashMap, HashSet, ConcurrentHashMap, Stream API, Collectors, Optional, ExecutorService, CompletableFuture, synchronized, ReentrantLock, garbage collector, heap, Spring Boot, Spring MVC, Spring Data JPA, Hibernate, EntityManager, @Transactional, @Autowired, @Qualifier, @Primary, @RestController, @GetMapping, JUnit 5, Mockito, Oracle Database, JDBC, Gradle, Maven, Kafka, AWS, Docker, CI/CD, and ADR.
+
+For a coding exercise with no explicit language, use the configured default implementation language (Java). Preserve an explicitly requested language or Java version. Keep conceptual Java questions classified as technical and algorithm/implementation tasks classified as coding. Do not infer a new coding problem from a follow-up that refers to the active solution.
+"""
+
+
+
 SYSTEM_PROMPT_EN = """You are a senior software engineer helping during a live technical interview.
 OUTPUT LANGUAGE IS LOCKED TO ENGLISH.
 Always answer in English, regardless of whether the question, transcript, recent conversation, or topic memory is in Spanish or mixed language.
@@ -348,7 +407,10 @@ class GroqInterviewAssistant:
         completion = self.client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": CONTEXTUALIZER_PROMPT},
+                {"role": "system", "content": (
+                    f"{CONTEXTUALIZER_PROMPT}\n\n"
+                    f"{UNOSQUARE_CONTEXTUALIZER_ADDENDUM}"
+                )},
                 {
                     "role": "user",
                     "content": (
@@ -543,6 +605,21 @@ class GroqInterviewAssistant:
                 else SYSTEM_PROMPT_EN
             )
             max_tokens = GROQ_MAX_COMPLETION_TOKENS
+
+        interview_context = (
+            UNOSQUARE_INTERVIEW_CONTEXT_ES
+            if language == "es"
+            else UNOSQUARE_INTERVIEW_CONTEXT_EN
+        )
+        instructions = "\n\n".join((instructions, interview_context))
+
+        if is_coding:
+            coding_context_instructions = (
+                UNOSQUARE_CODING_CONTEXT_ES
+                if language == "es"
+                else UNOSQUARE_CODING_CONTEXT_EN
+            )
+            instructions = "\n\n".join((instructions, coding_context_instructions))
 
         output_language = (
             "SPANISH"
