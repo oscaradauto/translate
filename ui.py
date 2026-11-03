@@ -483,6 +483,10 @@ class SubtitleTab(QWidget):
             MEETING_SUBTITLE_SPEECH_END_MS,
             MIC_SUBTITLE_MAX_UTTERANCE_SECONDS,
             MIC_SUBTITLE_SPEECH_END_MS,
+            STAGE1_LOW_CONFIDENCE_AVG_LOGPROB,
+            STAGE1_LOW_CONFIDENCE_FILTER_ENABLED,
+            STAGE1_LOW_CONFIDENCE_MAX_WORDS,
+            STAGE1_LOW_CONFIDENCE_NO_SPEECH_PROB,
             STAGE1_WHISPER_FINAL_BEAM_SIZE,
         )
         from vad_detector import ListenerController
@@ -500,6 +504,18 @@ class SubtitleTab(QWidget):
             suppress_repetition_loops=True,
             partial_beam_size=1,
             final_beam_size=STAGE1_WHISPER_FINAL_BEAM_SIZE,
+            filter_low_confidence_finals=(
+                STAGE1_LOW_CONFIDENCE_FILTER_ENABLED
+            ),
+            low_confidence_max_words=(
+                STAGE1_LOW_CONFIDENCE_MAX_WORDS
+            ),
+            low_confidence_avg_logprob=(
+                STAGE1_LOW_CONFIDENCE_AVG_LOGPROB
+            ),
+            low_confidence_no_speech_prob=(
+                STAGE1_LOW_CONFIDENCE_NO_SPEECH_PROB
+            ),
         )
 
         threading.Thread(
@@ -695,13 +711,19 @@ class SubtitleTab(QWidget):
         copy_button.setStyleSheet(_button_style())
         copy_button.setEnabled(bool(history_text))
 
+        # Keep the reset timer owned by the button. If the history dialog is
+        # closed before the timeout fires, Qt destroys both objects together,
+        # preventing a callback from touching an already-deleted QPushButton.
+        copy_reset_timer = QTimer(copy_button)
+        copy_reset_timer.setSingleShot(True)
+        copy_reset_timer.timeout.connect(
+            lambda: copy_button.setText("📋 Copiar todo")
+        )
+
         def copy_history() -> None:
             QApplication.clipboard().setText(history_text)
             copy_button.setText("✓ Copiado")
-            QTimer.singleShot(
-                1200,
-                lambda: copy_button.setText("📋 Copiar todo"),
-            )
+            copy_reset_timer.start(1200)
 
         copy_button.clicked.connect(copy_history)
         buttons.addWidget(copy_button)
