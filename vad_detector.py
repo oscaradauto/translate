@@ -11,6 +11,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
+import traceback
 import warnings
 from collections import deque
 from typing import Callable
@@ -781,6 +782,16 @@ class ListenerController:
         print(
             f"[Audio:{source}] "
             f"{self._exception_text(exc)}"
+        )
+        print(
+            f"[Audio:{source}] Full traceback:",
+            file=sys.stderr,
+        )
+        traceback.print_exception(
+            type(exc),
+            exc,
+            exc.__traceback__,
+            file=sys.stderr,
         )
 
     def start(self) -> None:
