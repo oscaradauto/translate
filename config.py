@@ -209,7 +209,7 @@ GROQ_STT_PROMPT_AUTO = os.getenv(
         "AWS, Azure, Java, Spring Boot, @Autowired, @Repository, JWT, OAuth, "
         "Circuit Breaker, Garbage Collector, Lambda, HashMap, ConcurrentHashMap, "
         "Kafka, GraphQL, REST API, Docker, Kubernetes, CI/CD, Java Streams, "
-        "Optional."
+        "Optional, Java 21, JDK/JRE/JVM, virtual threads, equals/hashCode, CompletableFuture, ExecutorService, Spring Data JPA, Hibernate, @Transactional, JUnit 5, Mockito, Oracle, Gradle, Maven."
     ),
 )
 
@@ -222,6 +222,7 @@ GROQ_STT_PROMPT_EN = os.getenv(
         "OAuth, Circuit Breaker, Garbage Collector, Lambda, HashMap, "
         "ConcurrentHashMap, Kafka, GraphQL, REST API, Docker, Kubernetes, "
         "CI/CD, Java Streams, Optional, JPA, JVM, Redis, MongoDB, SOLID. "
+        "Java 21, JDK/JRE/JVM, virtual threads, equals/hashCode, CompletableFuture, ExecutorService, Spring Data JPA, Hibernate, @Transactional, JUnit 5, Mockito, Oracle, Gradle, Maven. "
         "Do not phonetically rewrite established technical terms."
     ),
 )
@@ -237,7 +238,7 @@ GROQ_STT_PROMPT_ES = os.getenv(
         "@Repository, JWT, OAuth, Circuit Breaker, Garbage Collector, Lambda, "
         "HashMap, ConcurrentHashMap, Kafka, GraphQL, REST API, Docker, "
         "Kubernetes, CI/CD, Java Streams, Optional, JPA, JVM, Redis, MongoDB, "
-        "SOLID."
+        "SOLID, Java 21, JDK/JRE/JVM, virtual threads, equals/hashCode, CompletableFuture, ExecutorService, Spring Data JPA, Hibernate, @Transactional, JUnit 5, Mockito, Oracle, Gradle, Maven."
     ),
 )
 
